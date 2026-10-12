@@ -33,7 +33,7 @@
 6      iomem           -       -       -       # ioMemory
 7      rpmsg           -       -       -       # rpmsg
 8      scsi            5.6     5.6     5.6     # SCSI host
-9      p9              -       -       -       # 9P transport
+9      plan9           -       -       -       # 9P transport
 10     mac80211        -       -       -       # mac80211 wlan
 11     rprocserial     -       -       -       # rproc serial
 12     caif            -       -       -       # virtio CAIF
