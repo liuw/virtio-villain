@@ -568,6 +568,7 @@ class Qemu(VmmBackend):
         packed = opts.get("packed", True)
         pmem_path = opts.get("pmem_path")
         fs_socket = opts.get("fs_socket")
+        p9_sharedir = opts.get("p9_sharedir")
         api_socket = opts.get("api_socket")
         # When fuzzing one device, attach only that device so the guest
         # boots faster. None (the conformance runs) attaches the full set.
@@ -657,6 +658,14 @@ class Qemu(VmmBackend):
                 "-device", f"vhost-user-fs-pci,chardev=fs0,tag=vvfs,packed={packed_flag}",
                 "-object", f"memory-backend-file,id=mem-fs,size={mem},mem-path=/dev/shm,share=on",
                 "-numa", "node,memdev=mem-fs",
+            ]
+        if p9_sharedir and want("p9"):
+            cmd += [
+                "-fsdev",
+                f"local,id=fsdev9p,path={p9_sharedir},security_model=none",
+                "-device",
+                f"virtio-9p-pci,disable-legacy=on,packed={packed_flag}"
+                ",fsdev=fsdev9p,mount_tag=vv9p",
             ]
         # virtio-crypto with a builtin software cryptodev backend. CH has
         # no crypto device model, so crypto tests only run under QEMU.
@@ -786,6 +795,7 @@ class OpenVmm(VmmBackend):
         mem = opts.get("memory", "512M")
         pmem_path = opts.get("pmem_path")
         fs_socket = opts.get("fs_socket")
+        p9_sharedir = opts.get("p9_sharedir")
         vsock_path = disk_path.rsplit(".", 1)[0] + ".vsock"
         # When fuzzing one device, attach only that device so the guest
         # boots faster. None (the conformance runs) attaches the full set.
@@ -812,6 +822,8 @@ class OpenVmm(VmmBackend):
             ports.append("pmem")
         if want("fs") and fs_socket:
             ports.append("fs")
+        if want("p9") and p9_sharedir:
+            ports.append("p9")
 
         cmd = [
             self.binary,
@@ -858,6 +870,9 @@ class OpenVmm(VmmBackend):
         if want("fs") and fs_socket:
             cmd += ["--vhost-user",
                     f"{fs_socket},type=fs,tag=vvfs,pcie_port=fs"]
+        if want("p9") and p9_sharedir:
+            cmd += ["--virtio-9p",
+                    f"pcie_port=p9:vv9p,{p9_sharedir}"]
         if exit_on_end:
             # Fuzzing: the guest ends every run by powering off or
             # rebooting. The defaults halt or reset the VM, which would
@@ -1447,6 +1462,7 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
         "virtio_pmem_driver_init",
         "virtio_iommu_drv_init",
         "virtio_fs_init",
+        "p9_virtio_init",
         "virtio_vsock_init",
         "virtio_rtc_drv_init",
         "virtio_watchdog_driver_init",
@@ -1518,6 +1534,10 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
                     break
                 time.sleep(0.02)
             opts["fs_socket"] = fs_socket
+    p9_sharedir = None
+    if test_names[0].upper().startswith("PLAN9"):
+        p9_sharedir = tempfile.mkdtemp(prefix="vvp9.")
+        opts["p9_sharedir"] = p9_sharedir
     # Apply any VMM opts the sidecar declared (for example placing the
     # net device behind the vIOMMU). These are generic opts the backend
     # build_cmd already understands, so the runner stays test agnostic.
@@ -1819,6 +1839,8 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
                 pass
         if fs_sharedir:
             shutil.rmtree(fs_sharedir, ignore_errors=True)
+        if p9_sharedir:
+            shutil.rmtree(p9_sharedir, ignore_errors=True)
         os.unlink(disk_path)
         try:
             os.unlink(pmem_path)
@@ -1916,6 +1938,7 @@ PREFIX_DIR = {
     "I": "iommu",
     "RTC": "rtc",
     "F": "fs",
+    "PLAN9": "plan9",
     "CR": "crypto",
     "SND": "sound",
 }
@@ -1941,14 +1964,15 @@ PREFIX_DEVICE_ID = {
     "D": 0x1063,                 # watchdog
     "RTC": 0x1051,               # rtc
     "F": 0x105a,                 # fs
+    "PLAN9": 0x1049,             # 9p
     "CR": 0x1054,                # crypto
     "SND": 0x1059,               # sound
 }
 
 
 def _test_prefix(name):
-    """Return the leading uppercase prefix of a test name, or ''."""
-    m = re.match(r"^[A-Z]+", name)
+    """Return the recognized leading test prefix, or ''."""
+    m = re.match(r"^(?:PLAN9|[A-Z]+)", name)
     return m.group(0) if m else ""
 
 

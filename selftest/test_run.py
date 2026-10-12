@@ -162,6 +162,7 @@ def test_unit_test_prefix():
     assert f("PCI0050") == "PCI"
     assert f("RNG0001") == "RNG"
     assert f("RTC0016") == "RTC"
+    assert f("PLAN90001") == "PLAN9"
     assert f("B01") == "B"
     assert f("Z01") == "Z"
     assert f("99lower") == ""
@@ -174,6 +175,7 @@ def test_unit_test_dir_longest_prefix():
     assert f("RTC0001") == "rtc"
     assert f("RTC0016") == "rtc"
     assert f("RNG0001") == "rng"
+    assert f("PLAN90001") == "plan9"
     assert f("PCI0050") == "pci"
     assert f("R0001") == "mem"
     assert f("T01") == "vring"
@@ -523,6 +525,20 @@ def test_unit_qemu_fuzz_device_attaches_only_that_device():
     assert "-net" in cmd and cmd[cmd.index("-net") + 1] == "none"
 
 
+def test_unit_qemu_build_cmd_p9_optional():
+    be = RUN_MOD.Qemu("/usr/bin/qemu-system-x86_64")
+    without = be.build_cmd("/k", "/i", "/d.raw", "c", {})
+    assert not any("virtio-9p-pci" in str(arg) for arg in without)
+    with_p9 = be.build_cmd("/k", "/i", "/d.raw", "c",
+                           {"p9_sharedir": "/share"})
+    assert with_p9[with_p9.index("-fsdev") + 1] == (
+        "local,id=fsdev9p,path=/share,security_model=none")
+    device = next(arg for arg in with_p9 if "virtio-9p-pci" in str(arg))
+    assert "disable-legacy=on" in device
+    assert "fsdev=fsdev9p" in device
+    assert "mount_tag=vv9p" in device
+
+
 def test_unit_qemu_no_fuzz_device_attaches_full_set():
     """Without a fuzz device focus every device stays present, so the
     conformance command is unchanged."""
@@ -827,6 +843,17 @@ def test_unit_openvmm_build_cmd_fs_optional():
     assert _openvmm_opt(with_fs, "--vhost-user") == \
         "/d.fsd,type=fs,tag=vvfs,pcie_port=fs"
     assert "fs" in _openvmm_ports(with_fs)
+
+
+def test_unit_openvmm_build_cmd_p9_optional():
+    be = RUN_MOD.OpenVmm("/opt/openvmm/openvmm")
+    without = be.build_cmd("/k", "/i", "/d.raw", "c", {})
+    assert "--virtio-9p" not in without
+    with_p9 = be.build_cmd("/k", "/i", "/d.raw", "c",
+                           {"p9_sharedir": "/share"})
+    assert _openvmm_opt(with_p9, "--virtio-9p") == \
+        "pcie_port=p9:vv9p,/share"
+    assert "p9" in _openvmm_ports(with_p9)
 
 
 def test_unit_qemu_aio_forces_direct_gating():
