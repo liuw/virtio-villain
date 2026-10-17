@@ -86,6 +86,7 @@ virtio-villain/
     rtc/                # RTC - RTC / clock device violations
     sound/              # SND - sound control, PCM, descriptor, reset violations
     fs/                 # F - virtio-fs device violations
+    plan9/             # PLAN9 - virtio-9p transport and 9P2000.L violations
 ```
 
 The test binary is a static C executable that runs as PID 1 inside a
@@ -145,6 +146,7 @@ the VMM under test exposes the device).
 | -      | 5.21 | SPI Controller                       | no  |
 | -      | 5.22 | Media                                | no  |
 | RTC    | 5.23 | RTC / Clock                          | yes |
+| PLAN9  | ID 9 only | 9P transport                    | yes |
 | D      | ID 35 only | Watchdog                       | yes |
 | J      | ID 40 only | Bluetooth                      | reserved |
 | -      | ID 38 only | Parameter Server               | no  |
@@ -160,7 +162,7 @@ Spec section numbers above track v1.4 (CS01, 8 April 2026). The
 v1.4 Device Types table reserves IDs 1 to 48, but only 23 of them
 have a normative chapter (5.1 through 5.23). The rest, including
 Watchdog (ID 35), Bluetooth (ID 40), Parameter Server (ID 38),
-Audio Policy (ID 39), plus several others (9P, pstore, GPU video
+Audio Policy (ID 39), plus several others (pstore, GPU video
 codecs, NitroSecureModule, RDMA, Camera, ISM, TEE, CPU balloon),
 are allocated for interoperability but their spec text lives in
 separate OASIS drafts or has not landed yet. virtio-villain tests
