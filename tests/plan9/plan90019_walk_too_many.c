@@ -21,8 +21,8 @@ static test_result_t test(struct virtio_dev *dev, struct vring *vr)
     for (uint16_t i = 0; i < P9_MAXWELEM + 1; i++)
         names[i] = "x";
 
-    uint16_t tag;
-    uint32_t request_len;
+    uint16_t tag = 0;
+    uint32_t request_len = 0;
     uint8_t *request =
         plan9_build_walk(&ctx, 1, 2, names, P9_MAXWELEM + 1,
                          &tag, &request_len);
