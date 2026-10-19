@@ -2,9 +2,8 @@
 /*
  * V0200: virtio-vsock hot add discoverable through PCI rescan.
  *
- * Mirrors B0200 for the vsock device. Records the BDF of the
- * already attached vsock function, asks the kernel to rescan, and
- * polls for a new vsock function. On success runs virtio_pci_attach
+ * Starts without a vsock device, asks the kernel to rescan, and
+ * polls for the hot added vsock function. On success runs virtio_pci_attach
  * on the new function and asserts a fresh device_status of zero
  * per spec 4.1.4.3.1.
  */
@@ -69,18 +68,11 @@ static int find_other_dev(uint16_t devid, const char *skip_bdf,
     return found;
 }
 
-static const char *bdf_of(const char *slot)
-{
-    const char *s = strrchr(slot, '/');
-    return s ? s + 1 : slot;
-}
-
 static test_result_t test_vsock_hotplug_add(struct virtio_dev *dev,
                                             struct vring *vr)
 {
+    (void)dev;
     (void)vr;
-    char skip[256];
-    snprintf(skip, sizeof(skip), "%s", bdf_of(dev->slot));
 
     char new_slot[512] = {0};
     int waited = 0;
@@ -88,7 +80,7 @@ static test_result_t test_vsock_hotplug_add(struct virtio_dev *dev,
     int step = 100;
     while (waited < total) {
         if (trigger_pci_rescan() == 0
-            && find_other_dev(VIRTIO_PCI_DEVICE_VSOCK, skip,
+            && find_other_dev(VIRTIO_PCI_DEVICE_VSOCK, NULL,
                               new_slot, sizeof(new_slot)) == 0)
             break;
         usleep(step * 1000);
@@ -118,6 +110,6 @@ static test_result_t test_vsock_hotplug_add(struct virtio_dev *dev,
     return TEST_PASS;
 }
 
-REGISTER_TEST(V0200, VIRTIO_PCI_DEVICE_VSOCK, test_vsock_hotplug_add,
+REGISTER_TEST(V0200, 0, test_vsock_hotplug_add,
               "virtio-vsock hot add presents a fresh device_status",
               VIRTIO_SPEC_V1_2, "4.1.4.3.1");

@@ -529,7 +529,7 @@ class CloudHypervisor(VmmBackend):
                 endpoint += f",ip={net_rx_ip},mask=255.255.255.0"
             cmd += ["--net", f"{endpoint},num_queues={net_queues}"
                     f"{',iommu=on' if opts.get('net_iommu') else ''}"]
-        if want("vsock"):
+        if want("vsock") and opts.get("vsock_enabled", True):
             cmd += ["--vsock", f"cid={cid},socket={vsock_sock}"]
         if want("balloon"):
             cmd += ["--balloon", "size=0"]

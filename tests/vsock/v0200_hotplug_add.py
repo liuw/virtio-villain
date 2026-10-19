@@ -2,19 +2,22 @@
 """
 V0200 sidecar. Hot adds a vsock function with cid 44 and id hp_vsock.
 """
+import os
+
+from host_helpers import wait_ready
 
 SUPPORTED_BACKENDS = ("ch",)
 
 
-def run(ctx):
-    if ctx.backend.name != "ch":
-        ctx.skip("backend is not CH")
-    if ctx.api_sock is None:
-        ctx.skip("api socket disabled")
-    if not ctx.wait_text("[vv]", timeout=20.0):
-        raise RuntimeError("guest harness banner not seen")
+def vmm_config():
+    return {"opts": {"vsock_enabled": False}}
 
-    cp = ctx.vm_api("add-vsock", ["cid=44,id=hp_vsock"])
+
+def run(ctx):
+    wait_ready(ctx)
+
+    socket = os.path.join(ctx.tmpdir, "vsock.sock")
+    cp = ctx.vm_api("add-vsock", [f"cid=44,id=hp_vsock,socket={socket}"])
     if cp.returncode != 0:
         raise RuntimeError(
             f"add-vsock failed rc={cp.returncode} "
