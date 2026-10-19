@@ -13,6 +13,7 @@
 #include "lib/virtio_spec.h"
 
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Reset before replacing queues that the harness already enabled. */
@@ -132,6 +133,48 @@ static inline test_result_t scsi_do_tmf(struct virtio_dev *dev,
     vring_raw_set_avail(vr, seq, 0);
     vring_raw_set_avail_idx(vr, seq + 1);
     return vv_kick_and_wait(dev, vr, 0, VV_TIMEOUT_MS);
+}
+
+/* A kick on another queue does not guarantee that the request is pending. */
+static inline test_result_t scsi_tmf_when_pending(
+    struct virtio_dev *dev, struct vring *control,
+    const struct virtio_scsi_cmd_req *request,
+    const volatile struct virtio_scsi_cmd_resp *request_response,
+    struct virtio_scsi_ctrl_tmf_req *tmf,
+    struct virtio_scsi_ctrl_tmf_resp *tmf_response)
+{
+    struct virtio_scsi_ctrl_tmf_req *query = vv_alloc_pages(1);
+    struct virtio_scsi_ctrl_tmf_resp *response = vv_alloc_pages(1);
+    memset(query, 0, sizeof(*query));
+    query->type = VIRTIO_SCSI_T_TMF;
+    query->subtype = VIRTIO_SCSI_T_TMF_QUERY_TASK;
+    memcpy(query->lun, request->lun, sizeof(query->lun));
+    query->tag = request->tag;
+    struct timespec start, now;
+    if (clock_gettime(CLOCK_MONOTONIC, &start) < 0)
+        vv_die("SCSI task synchronization clock failed");
+    for (;;) {
+        __sync_synchronize();
+        if (request_response->response != 0xFF)
+            TSKIP("request completed before the task management operation");
+        test_result_t result = scsi_do_tmf(
+            dev, control, query, response, control->avail->idx);
+        if (result != TEST_PASS)
+            return result;
+        if (response->response == VIRTIO_SCSI_S_FUNCTION_SUCCEEDED)
+            return scsi_do_tmf(dev, control, tmf, tmf_response,
+                               control->avail->idx);
+        if (response->response != VIRTIO_SCSI_S_FUNCTION_COMPLETE)
+            TFAIL("QUERY TASK synchronization response 0x%02x",
+                  response->response);
+        if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+            vv_die("SCSI task synchronization clock failed");
+        int64_t elapsed = (int64_t)(now.tv_sec - start.tv_sec) * 1000000000
+                        + now.tv_nsec - start.tv_nsec;
+        if (elapsed >= 2000000000)
+            TFAIL("submitted request never became observable to QUERY TASK");
+        usleep(1000);
+    }
 }
 
 /* True if the byte is one of the defined control queue response codes. */

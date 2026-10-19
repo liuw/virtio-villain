@@ -79,7 +79,10 @@ static test_result_t test_scsi_abort_inflight(struct virtio_dev *dev,
     tmf->subtype = VIRTIO_SCSI_T_TMF_ABORT_TASK;
     scsi_set_lun(tmf->lun, 0, 0);
     tmf->tag = ABORT_TAG;
-    scsi_do_tmf(dev, vr, tmf, tmf_resp, 0);
+    test_result_t pending = scsi_tmf_when_pending(
+        dev, vr, rb, rb_resp, tmf, tmf_resp);
+    if (pending != TEST_PASS)
+        return pending;
 
     /* Wait for the aborted read to complete on the request queue. */
     int elapsed = 0;

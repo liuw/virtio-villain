@@ -55,7 +55,10 @@ static test_result_t test_scsi_double_abort(struct virtio_dev *dev,
     tmf->subtype = VIRTIO_SCSI_T_TMF_ABORT_TASK;
     scsi_set_lun(tmf->lun, 0, 0);
     tmf->tag = ABORT_TAG;
-    scsi_do_tmf(dev, vr, tmf, tmf_resp, 0);
+    test_result_t pending = scsi_tmf_when_pending(
+        dev, vr, rb, rb_resp, tmf, tmf_resp);
+    if (pending != TEST_PASS)
+        return pending;
 
     if (!scsi_wait_used(&rq, before, 8000000))
         TSKIP("read did not complete (no host throttle)");
@@ -72,7 +75,7 @@ static test_result_t test_scsi_double_abort(struct virtio_dev *dev,
     tmf2->subtype = VIRTIO_SCSI_T_TMF_ABORT_TASK;
     scsi_set_lun(tmf2->lun, 0, 0);
     tmf2->tag = ABORT_TAG;
-    scsi_do_tmf(dev, vr, tmf2, tmf2_resp, 1);
+    scsi_do_tmf(dev, vr, tmf2, tmf2_resp, vr->avail->idx);
 
     if (tmf2_resp->response != VIRTIO_SCSI_S_FUNCTION_COMPLETE)
         TFAIL("second abort response 0x%02x is not function complete",
