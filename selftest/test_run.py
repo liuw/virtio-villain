@@ -206,6 +206,7 @@ def test_unit_probe_cache_identity_and_shared_readers():
         with open(segment, "rb") as stream:
             assert stream.read() == before
         retry_key = "e" * 64
+
         def racing_probe():
             RUN_MOD._cached_probe(
                 retry_key, lambda: b"PROBE\t1042\t2\t3\n")
@@ -2483,8 +2484,8 @@ def test_unit_sidecar_outcomes():
                                             "desc": "command failed"}},
                                  b"invalid reply", {}, None])
                 for failure in (*responses,
-                        RuntimeError("API connection failed"),
-                        subprocess.TimeoutExpired(command.args[0], 30)):
+                                RuntimeError("API connection failed"),
+                                subprocess.TimeoutExpired(command.args[0], 30)):
                     ctx.log.reset_mock()
                     ctx.vm_api.reset_mock()
                     ctx.vm_api.side_effect = (
