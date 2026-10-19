@@ -3,7 +3,7 @@
 
 from host_helpers import snapshot, snapshot_config
 
-SUPPORTED_BACKENDS = ("ch", "qemu")
+SUPPORTED_BACKENDS = ("ch", "qemu", "openvmm")
 run = snapshot
 
 

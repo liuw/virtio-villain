@@ -806,6 +806,8 @@ class OpenVmm(VmmBackend):
         exit_on_end = bool(opts.get("exit_on_guest_end"))
 
         def want(dev):
+            if opts.get("vm_snapshot") and dev in ("console", "vsock"):
+                return False
             return only is None or only == dev
 
         rc = self._ROOT_COMPLEX
