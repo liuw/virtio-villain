@@ -12,6 +12,9 @@ def wait_ready(ctx):
         ctx.skip("api socket disabled")
     if not ctx.wait_text("[vv]", timeout=20.0):
         raise RuntimeError("guest harness banner not seen")
+    if ctx.backend.name == "qemu-mmio":
+        if not ctx.wait_text("vv-mmio-ready", timeout=20.0):
+            raise RuntimeError("guest MMIO device not ready")
 
 
 def qmp(ctx, command, arguments=None):

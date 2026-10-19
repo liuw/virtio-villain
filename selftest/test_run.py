@@ -1346,10 +1346,41 @@ def test_unit_detect_vmm_unknown_aborts():
 
 def test_unit_qemu_microvm_build_cmd_uses_mmio_device():
     be = RUN_MOD.QemuMicrovm("/usr/bin/qemu-system-x86_64")
-    opts = {"memory": "256M"}
+    opts = {"memory": "256M", "api_socket": "/api"}
     cmd = be.build_cmd("/k", "/i", "/d.raw", "console=ttyS0", opts)
     assert "virtio-blk-device,drive=vd0" in cmd
     assert not any("virtio-blk-pci" in str(a) for a in cmd)
+    assert "unix:/api,server=on,wait=off" in cmd
+    assert not any("x-option-roms=off" in str(a) for a in cmd)
+    assert "virtio-mmio.force-legacy=false" in cmd
+
+
+def test_unit_qemu_microvm_selects_sidecar_device():
+    be = RUN_MOD.QemuMicrovm("/usr/bin/qemu-system-x86_64")
+    for device, model in (
+            ("blk", "virtio-blk-device"),
+            ("rng", "virtio-rng-device"),
+            ("balloon", "virtio-balloon-device"),
+            ("rtc", "virtio-rtc-device"),
+            ("console", "virtio-serial-device"),
+            ("vsock", "vhost-vsock-device")):
+        cmd = be.build_cmd("/k", "/i", "/d.raw", "console=ttyS0",
+                           {"mmio_device": device,
+                            "scsi_path": "/scsi.raw",
+                            "scsi_path2": "/scsi2.raw"})
+        models = [cmd[i + 1].split(",")[0] for i, arg in enumerate(cmd[:-1])
+                  if arg == "-device" and cmd[i + 1].split(",")[0] in (
+                      "virtio-blk-device", "virtio-rng-device",
+                      "virtio-balloon-device", "virtio-rtc-device",
+                      "virtio-serial-device", "vhost-vsock-device",
+                      "virtio-scsi-device")]
+        assert models == [model], (device, models)
+    try:
+        be.build_cmd("/k", "/i", "/d.raw", "", {"mmio_device": "unknown"})
+    except ValueError as error:
+        assert "unsupported MMIO device" in str(error)
+    else:
+        raise AssertionError("unsupported MMIO device accepted")
 
 
 def test_unit_fetch_kernel_selects_mmio_image():

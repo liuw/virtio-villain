@@ -736,15 +736,34 @@ class QemuMicrovm(VmmBackend):
             "-kernel", kernel,
             "-initrd", initramfs,
             "-drive", self._qemu_drive_arg(disk_path, qemu_fmt, opts),
-            "-device", "virtio-blk-device,drive=vd0",
             "-append", cmdline,
             "-nographic",
             "-no-reboot",
             "-m", mem,
             "-smp", "1",
         ]
+        device = opts.get("mmio_device", "blk")
+        if device == "blk":
+            cmd += ["-device", "virtio-blk-device,drive=vd0"]
+        elif device == "rng":
+            cmd += ["-object", "rng-random,id=rng0,filename=/dev/urandom",
+                    "-device", "virtio-rng-device,rng=rng0"]
+        elif device in ("balloon", "rtc"):
+            cmd += ["-device", f"virtio-{device}-device"]
+        elif device == "vsock":
+            cmd += ["-device",
+                    f"vhost-vsock-device,guest-cid={Qemu._next_cid()}"]
+        elif device == "console":
+            cmd += ["-device", "virtio-serial-device,id=console0",
+                    "-chardev", "null,id=console-output",
+                    "-device",
+                    "virtconsole,bus=console0.0,chardev=console-output"]
+        else:
+            raise ValueError(f"unsupported MMIO device: {device}")
         if arch != "aarch64":
             cmd += ["-device", "isa-debug-exit,iobase=0x501,iosize=1"]
+        if opts.get("api_socket"):
+            cmd += ["-qmp", f"unix:{opts['api_socket']},server=on,wait=off"]
         cmd[1:1] = self.trace_args(opts)
         return cmd
 
@@ -1283,7 +1302,7 @@ def vm_api(api_socket, backend, command, args=None, timeout=None):
         return subprocess.run(cmd, capture_output=True, text=True,
                               timeout=timeout)
 
-    if isinstance(backend, Qemu):
+    if isinstance(backend, (Qemu, QemuMicrovm)):
         import json
         import socket as _socket
         s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
@@ -1577,9 +1596,11 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
     ]
     skip_initcalls += list(sidecar_cfg.get("skip_initcalls", []))
     wait_scale = (opts or {}).get("wait_scale", 1)
+    transport = "mmio" if backend.name == "qemu-mmio" else "pci"
     cmdline = (f"console={backend.console_device} "
                f"initcall_blacklist={','.join(skip_initcalls)} "
                f"vv.wait_scale={wait_scale} "
+               f"vv.transport={transport} "
                f"vv.test={','.join(test_names)}")
     # Create pmem backing file
     pmem_path = disk_path.rsplit(".", 1)[0] + ".pmem"
@@ -1604,7 +1625,7 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
 
     api_socket = None
     openvmm_control = bool(opts.get("api_enabled") and backend.name == "openvmm")
-    if opts.get("api_enabled") and backend.name in ("ch", "qemu"):
+    if opts.get("api_enabled") and backend.name in ("ch", "qemu", "qemu-mmio"):
         api_socket = disk_path.rsplit(".", 1)[0] + ".api"
         opts["api_socket"] = api_socket
     else:
