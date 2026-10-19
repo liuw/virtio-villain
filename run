@@ -1285,36 +1285,36 @@ def vm_api(api_socket, backend, command, args=None, timeout=None):
         s.settimeout(timeout)
         s.connect(api_socket)
         try:
-            buf = b""
-            while b"\n" not in buf:
-                chunk = s.recv(4096)
-                if not chunk:
-                    break
-                buf += chunk
-            s.sendall(b'{"execute":"qmp_capabilities"}\n')
-            buf = b""
-            while b"\n" not in buf:
-                chunk = s.recv(4096)
-                if not chunk:
-                    break
-                buf += chunk
-            req = {"execute": command}
-            if args is not None:
-                req["arguments"] = args
-            s.sendall((json.dumps(req) + "\n").encode())
-            buf = b""
-            while True:
-                chunk = s.recv(4096)
-                if not chunk:
-                    break
-                buf += chunk
-                if b"\n" in buf:
-                    break
-            line = buf.split(b"\n", 1)[0]
-            try:
-                return json.loads(line.decode())
-            except (ValueError, UnicodeDecodeError):
-                return line
+            with s.makefile("rb") as stream:
+                def read_reply():
+                    while True:
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            raise TimeoutError(f"QMP {command} timed out")
+                        s.settimeout(remaining)
+                        line = stream.readline().rstrip(b"\r\n")
+                        try:
+                            reply = json.loads(line.decode())
+                        except (ValueError, UnicodeDecodeError):
+                            return line
+                        if not isinstance(reply, dict) or "event" not in reply:
+                            return reply
+
+                greeting = read_reply()
+                if not isinstance(greeting, dict) or "QMP" not in greeting:
+                    raise RuntimeError(f"invalid QMP greeting: {greeting!r}")
+                s.sendall(b'{"execute":"qmp_capabilities"}\n')
+                capabilities = read_reply()
+                if (not isinstance(capabilities, dict)
+                        or "return" not in capabilities
+                        or "error" in capabilities):
+                    raise RuntimeError(
+                        f"QMP capabilities failed: {capabilities!r}")
+                req = {"execute": command}
+                if args is not None:
+                    req["arguments"] = args
+                s.sendall((json.dumps(req) + "\n").encode())
+                return read_reply()
         finally:
             s.close()
 

@@ -1218,7 +1218,7 @@ def test_unit_vm_api_qemu_qmp_roundtrip():
                     break
                 buf += chunk
             captured["caps"] = buf.split(b"\n", 1)[0]
-            c.sendall(b'{"return":{}}\n')
+            c.sendall(b'{"event":"RESET"}\n{"return":{}}\n')
             buf = b""
             while b"\n" not in buf:
                 chunk = c.recv(4096)
@@ -1226,7 +1226,9 @@ def test_unit_vm_api_qemu_qmp_roundtrip():
                     break
                 buf += chunk
             captured["cmd"] = buf.split(b"\n", 1)[0]
-            c.sendall(b'{"return":{"status":"running"}}\n')
+            c.sendall(b'{"event":"STOP"}\n'
+                      b'{"event":"RESUME"}\n'
+                      b'{"return":{"status":"running"}}\n')
         finally:
             c.close()
             srv.close()
