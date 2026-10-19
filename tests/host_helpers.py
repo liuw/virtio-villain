@@ -92,3 +92,49 @@ def remove_disk(ctx):
                 raise TimeoutError("QEMU did not complete device_del for hp0")
             time.sleep(0.02)
     ctx.log("remove-device completed")
+
+
+def snapshot_config(mmio_device="blk"):
+    return {"opts": {"vm_snapshot": True, "mmio_device": mmio_device}}
+
+
+def snapshot(ctx):
+    wait_ready(ctx)
+    if ctx.backend.name == "openvmm":
+        ch_command(ctx, "pulse-save-restore")
+        ctx.log("VM device state saved and restored")
+        return
+    snap_dir = os.path.join(ctx.tmpdir, "snap")
+    os.makedirs(snap_dir, exist_ok=True)
+    if ctx.backend.name == "ch":
+        ch_command(ctx, "pause")
+        try:
+            ch_command(ctx, "snapshot", [f"file://{snap_dir}"])
+        finally:
+            ch_command(ctx, "resume")
+    else:
+        qmp(ctx, "stop")
+        try:
+            qmp(ctx, "migrate", {"uri": f"file:{snap_dir}/vmstate"})
+            deadline = time.monotonic() + 20
+            while True:
+                reply = qmp(ctx, "query-migrate")
+                migration = reply["return"]
+                if not isinstance(migration, dict):
+                    raise RuntimeError(f"QMP query-migrate failed: {reply!r}")
+                state = migration.get("status")
+                if state == "completed":
+                    break
+                if state in ("failed", "cancelled") or state is None:
+                    raise RuntimeError(f"QMP query-migrate failed: {reply!r}")
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("QMP query-migrate timed out")
+                time.sleep(0.02)
+            state_file = os.path.join(snap_dir, "vmstate")
+            size = os.path.getsize(state_file)
+            if size == 0:
+                raise RuntimeError("QEMU saved an empty VM state file")
+            ctx.log(f"saved VM state: {size} bytes")
+        finally:
+            qmp(ctx, "cont")
+    ctx.log("snapshot completed")

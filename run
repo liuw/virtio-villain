@@ -672,7 +672,7 @@ class Qemu(VmmBackend):
             ]
         # virtio-crypto with a builtin software cryptodev backend. CH has
         # no crypto device model, so crypto tests only run under QEMU.
-        if want("crypto"):
+        if want("crypto") and not opts.get("vm_snapshot"):
             cmd += [
                 "-object", "cryptodev-backend-builtin,id=cryptodev0",
                 "-device",

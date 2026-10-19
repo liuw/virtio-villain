@@ -2386,6 +2386,85 @@ def test_unit_sidecar_outcomes():
     assert cases, "no sidecars were checked"
 
 
+def test_unit_host_action_completion():
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    helpers = RUN_MOD._load_sidecar(
+        os.path.join(ROOT_DIR, "tests", "host_helpers.py"))
+    for states, file_contents, error in (
+            ([{"status": "active"}, {"status": "completed"}], b"state", None),
+            ([{"status": "failed"}], b"state", RuntimeError),
+            ([{"status": "cancelled"}], b"state", RuntimeError),
+            ([[]], b"state", RuntimeError),
+            ([{}], b"state", RuntimeError),
+            ([{"status": "active"}], b"state", TimeoutError),
+            ([{"status": "completed"}], b"", RuntimeError),
+            ([{"status": "completed"}], None, FileNotFoundError)):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.mkdir(os.path.join(tmpdir, "snap"))
+            if file_contents is not None:
+                with open(os.path.join(tmpdir, "snap", "vmstate"), "wb") as f:
+                    f.write(file_contents)
+            replies = iter(states)
+            commands = []
+
+            def snapshot_response(command, arguments=None):
+                commands.append(command)
+                return {"return": next(replies) if command == "query-migrate"
+                        else {}}
+
+            ctx = SimpleNamespace(
+                backend=SimpleNamespace(name="qemu"), api_sock="api",
+                tmpdir=tmpdir, wait_text=Mock(return_value=True), log=Mock(),
+                vm_api=snapshot_response)
+            clock = [0, 21] if error is TimeoutError else [0, 0]
+            with patch.object(helpers.time, "sleep"), \
+                 patch.object(helpers.time, "monotonic", side_effect=clock):
+                try:
+                    helpers.snapshot(ctx)
+                except (RuntimeError, TimeoutError, FileNotFoundError) as exc:
+                    assert error is not None and isinstance(exc, error), (
+                        states, error, exc)
+                else:
+                    assert error is None, states
+            assert commands[:2] == ["stop", "migrate"], commands
+            assert commands[-1] == "cont", commands
+            completed = any(call.args == ("snapshot completed",)
+                            for call in ctx.log.call_args_list)
+            assert completed == (error is None), (states, completed)
+
+    for responses, error in (
+            ([[{"name": "hp0"}], []], None),
+            ([[{"name": "hp0"}]], TimeoutError),
+            ([{}], RuntimeError),
+            ([[{"name": None}]], RuntimeError)):
+        replies = iter(responses)
+        commands = []
+
+        def removal_response(command, arguments=None):
+            commands.append(command)
+            return {"return": next(replies) if command == "qom-list" else {}}
+
+        ctx = SimpleNamespace(
+            backend=SimpleNamespace(name="qemu"), vm_api=removal_response,
+            log=Mock())
+        clock = [0, 6] if error is TimeoutError else [0, 0]
+        with patch.object(helpers.time, "sleep"), \
+             patch.object(helpers.time, "monotonic", side_effect=clock):
+            try:
+                helpers.remove_disk(ctx)
+            except (RuntimeError, TimeoutError) as exc:
+                assert error is not None and isinstance(exc, error), (
+                    responses, error, exc)
+            else:
+                assert error is None, responses
+        assert commands[:2] == ["device_del", "qom-list"], commands
+        completed = any(call.args == ("remove-device completed",)
+                        for call in ctx.log.call_args_list)
+        assert completed == (error is None), (responses, completed)
+
+
 def test_unit_sidecar_runtime_skip_preserves_failures():
     from types import SimpleNamespace
     from unittest.mock import patch
