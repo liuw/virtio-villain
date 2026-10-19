@@ -50,3 +50,27 @@ static test_result_t test_balloon_resize(struct virtio_dev *dev,
 REGISTER_TEST(L0200, VIRTIO_PCI_DEVICE_BALLOON, test_balloon_resize,
               "virtio-balloon resize updates num_pages and config_generation",
               VIRTIO_SPEC_V1_2, "5.5.4");
+
+static test_result_t test_balloon_resize_mmio(struct virtio_mmio_dev *dev)
+{
+    if (virtio_mmio_init(dev) < 0)
+        TFAIL("MMIO balloon feature negotiation failed");
+    mmio_write32(dev, VIRTIO_MMIO_STATUS,
+                 mmio_read32(dev, VIRTIO_MMIO_STATUS)
+                 | VIRTIO_MMIO_STATUS_DRIVER_OK);
+    uint32_t pages = mmio_read32(dev, VIRTIO_MMIO_CONFIG);
+    uint32_t generation = mmio_read32(dev, VIRTIO_MMIO_CONFIG_GENERATION);
+    puts("vv-mmio-ready");
+    fflush(stdout);
+    for (int elapsed = 0; elapsed < 15000; elapsed += 10) {
+        if (mmio_read32(dev, VIRTIO_MMIO_CONFIG) != pages) {
+            if (mmio_read32(dev, VIRTIO_MMIO_CONFIG_GENERATION) == generation)
+                TFAIL("MMIO balloon config generation did not change");
+            return TEST_PASS;
+        }
+        usleep(10000);
+    }
+    TFAIL("MMIO balloon target did not change");
+}
+
+REGISTER_MMIO_VARIANT(L0200, 5, test_balloon_resize_mmio);

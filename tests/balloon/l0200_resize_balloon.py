@@ -6,7 +6,11 @@ watches num_pages and config_generation for the change.
 
 from host_helpers import ch_command, qmp, wait_ready
 
-SUPPORTED_BACKENDS = ("ch", "qemu")
+SUPPORTED_BACKENDS = ("ch", "qemu", "qemu-mmio")
+
+
+def vmm_config():
+    return {"opts": {"mmio_device": "balloon"}}
 
 
 def run(ctx):
