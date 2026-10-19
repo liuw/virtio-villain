@@ -28,6 +28,9 @@
 
 #define P9_VERSION "9P2000.L"
 #define P9_VERSION_LEN 8
+#define P9_GETATTR_MODE 0x00000002u
+#define P9_MODE_TYPE_MASK 0170000
+#define P9_MODE_DIRECTORY 0040000
 #define P9_QID_TYPE_DIRECTORY 0x80
 
 struct p9_header {
@@ -53,6 +56,30 @@ struct p9_getattr {
     struct p9_header header;
     uint32_t fid;
     uint64_t request_mask;
+} __attribute__((packed));
+
+struct p9_getattr_response {
+    struct p9_header header;
+    uint64_t valid;
+    struct p9_qid qid;
+    uint32_t mode;
+    uint32_t uid;
+    uint32_t gid;
+    uint64_t nlink;
+    uint64_t rdev;
+    uint64_t size;
+    uint64_t blksize;
+    uint64_t blocks;
+    uint64_t atime_sec;
+    uint64_t atime_nsec;
+    uint64_t mtime_sec;
+    uint64_t mtime_nsec;
+    uint64_t ctime_sec;
+    uint64_t ctime_nsec;
+    uint64_t btime_sec;
+    uint64_t btime_nsec;
+    uint64_t gen;
+    uint64_t data_version;
 } __attribute__((packed));
 
 #endif /* VV_VIRTIO_9P_H */
