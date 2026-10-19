@@ -11,6 +11,7 @@
 #include "lib/vring.h"
 #include "lib/virtio_pci.h"
 #include "lib/virtio_spec.h"
+#include "tests/mmio/mmio_helpers.h"
 
 #include <string.h>
 #include <unistd.h>
@@ -41,3 +42,44 @@ static test_result_t test_console_pause_tx(struct virtio_dev *dev,
 REGISTER_TEST_Q(C0200, VIRTIO_PCI_DEVICE_CONSOLE, test_console_pause_tx,
                 "Console transmitq survives a pause and resume cycle",
                 VIRTIO_SPEC_V1_2, "5.3", 1);
+
+static test_result_t do_tx_mmio(struct virtio_mmio_dev *dev,
+                               struct vring *ring, const char *message)
+{
+    char *buffer = vv_alloc_pages(1);
+    size_t length = strlen(message);
+    memcpy(buffer, message, length);
+    vring_raw_set_desc(ring, 0, vv_virt_to_phys(buffer), length, 0, 0);
+    uint16_t before = ring->used->idx;
+    vring_submit(ring, 0);
+    virtio_mmio_kick(dev, 1);
+    for (int elapsed = 0; elapsed < VV_TIMEOUT_MS * 4 * vv_wait_scale; elapsed++) {
+        __sync_synchronize();
+        if (ring->used->idx != before)
+            return TEST_PASS;
+        usleep(1000);
+    }
+    TWEDGED("MMIO console TX did not complete");
+}
+
+static test_result_t test_console_pause_mmio(struct virtio_mmio_dev *dev)
+{
+    if (virtio_mmio_init(dev) < 0)
+        TFAIL("MMIO console feature negotiation failed");
+    struct vring ring;
+    test_result_t result = mmio_attach_queue(dev, &ring, 1);
+    if (result != TEST_PASS)
+        return result;
+    mmio_write32(dev, VIRTIO_MMIO_STATUS,
+                 mmio_read32(dev, VIRTIO_MMIO_STATUS)
+                 | VIRTIO_MMIO_STATUS_DRIVER_OK);
+    result = do_tx_mmio(dev, &ring, "vv-a\n");
+    if (result != TEST_PASS)
+        return result;
+    puts("vv-mmio-ready");
+    fflush(stdout);
+    sleep(2);
+    return do_tx_mmio(dev, &ring, "vv-b\n");
+}
+
+REGISTER_MMIO_VARIANT(C0200, 3, test_console_pause_mmio);

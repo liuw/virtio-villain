@@ -4,7 +4,7 @@ C0200 sidecar. Pauses and resumes the VM around a console TX flush.
 """
 from host_helpers import pause_resume
 
-SUPPORTED_BACKENDS = ("ch", "qemu", "openvmm")
+SUPPORTED_BACKENDS = ("ch", "qemu", "qemu-mmio", "openvmm")
 run = pause_resume
 
 
