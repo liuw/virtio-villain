@@ -1911,6 +1911,43 @@ def test_unit_sidecar_supported_backend_runs():
         action.assert_called_once()
 
 
+def test_unit_sidecar_runtime_skip_preserves_failures():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    class Backend:
+        name = "fake"
+        console_device = "ttyS0"
+        mmio_transport = False
+
+        def __init__(self, verdict):
+            self.verdict = verdict
+
+        def build_cmd(self, kernel, initramfs, disk_path, cmdline, opts=None):
+            return ["sh", "-c",
+                    f"sleep 0.1; printf '[{self.verdict}] T0001\\n'"]
+
+    def skip_action(ctx):
+        ctx.skip("api socket disabled")
+        raise AssertionError("ctx.skip returned")
+
+    sidecar = SimpleNamespace(run=skip_action)
+    for verdict in ("PASS", "REJECT", "SKIP", "XFAIL",
+                    "FAIL", "WEDGED", "XPASS"):
+        with patch.object(RUN_MOD, "_find_sidecar", return_value="sidecar"), \
+             patch.object(RUN_MOD, "_load_sidecar", return_value=sidecar):
+            results = RUN_MOD.run_test(
+                Backend(verdict), "kernel", "T0001",
+                5, 0, False, "raw", {})
+        _, status, output = results[0]
+        expected = verdict if verdict in ("FAIL", "WEDGED", "XPASS") \
+            else "SKIP"
+        assert status == expected, (verdict, status, output)
+        assert "[vv-sidecar] SKIP: api socket disabled" in output
+        assert "[vv-sidecar] FAIL:" not in output
+        assert "Traceback" not in output
+
+
 def test_unit_probe_filter_excludes_missing_device():
     """Tests targeting a device not in available_devices are excluded."""
     tests = ["RNG0001", "RTC0022", "D0001"]

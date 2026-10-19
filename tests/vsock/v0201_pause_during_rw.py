@@ -12,8 +12,7 @@ def run(ctx):
         ctx.log("backend is not CH, skipping")
         return
     if ctx.api_sock is None:
-        ctx.log("api socket disabled, skipping")
-        return
+        ctx.skip("api socket disabled")
     if not ctx.wait_text("[vv]", timeout=20.0):
         ctx.log("guest harness banner not seen")
         return

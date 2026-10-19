@@ -1249,6 +1249,10 @@ def _find_ch_remote(ch_binary):
 # tied to the API socket. Tests that do not need a host actor simply
 # do not ship a sidecar.
 
+class _SidecarSkip(Exception):
+    pass
+
+
 class _Ctx:
     """Context object passed to a sidecar's run() function."""
 
@@ -1264,6 +1268,10 @@ class _Ctx:
         self.stop = stop_event
         self._buf = output_buf
         self._lock = output_lock
+
+    def skip(self, reason):
+        """Stop the host actor because a required prerequisite is absent."""
+        raise _SidecarSkip(reason)
 
     def vm_api(self, command, args=None, timeout=None):
         """Convenience wrapper. Calls vm_api with this context's
@@ -1587,7 +1595,7 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
     proc = None
     openvmm_master = None
     sidecar_thread = None
-    sidecar_state = {"err": None}
+    sidecar_state = {"err": None, "skip": None}
     sidecar_stop = threading.Event()
     sidecar_tmpdir = None
     sidecar_log_lines = []
@@ -1680,6 +1688,8 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
             def _sc_run():
                 try:
                     sidecar_mod.run(ctx)
+                except _SidecarSkip as e:
+                    sidecar_state["skip"] = str(e)
                 except BaseException as e:  # capture for the runner
                     import traceback as _tb
                     sidecar_state["err"] = (e, _tb.format_exc())
@@ -1813,6 +1823,11 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
             extra = ""
             if sidecar_log_lines:
                 extra += "\n" + "\n".join(sidecar_log_lines) + "\n"
+            skip_reason = sidecar_state["skip"]
+            if skip_reason is not None:
+                extra += f"\n[vv-sidecar] SKIP: {skip_reason}\n"
+                if status not in ("FAIL", "WEDGED", "XPASS"):
+                    status = "SKIP"
             if err is not None:
                 extra += f"\n[vv-sidecar] FAIL: {err[0]}\n{err[1]}\n"
                 if status != "WEDGED":
