@@ -33,6 +33,22 @@ def ch_command(ctx, command, arguments=None):
     return response
 
 
+def pause_resume(ctx):
+    wait_ready(ctx)
+    if ctx.backend.name in ("ch", "openvmm"):
+        ch_command(ctx, "pause")
+    else:
+        qmp(ctx, "stop")
+    try:
+        time.sleep(0.5)
+    finally:
+        if ctx.backend.name in ("ch", "openvmm"):
+            ch_command(ctx, "resume")
+        else:
+            qmp(ctx, "cont")
+    ctx.log("paused and resumed")
+
+
 def add_disk(ctx):
     hp_disk = os.path.join(ctx.tmpdir, "hp.raw")
     with open(hp_disk, "wb") as image:
