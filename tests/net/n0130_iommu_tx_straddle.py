@@ -16,6 +16,8 @@ This sidecar only declares configuration; it has no run(ctx) host
 actor, so the runner does not start a sidecar thread for it.
 """
 
+SUPPORTED_BACKENDS = ("ch", "qemu", "openvmm")
+
 
 def vmm_config():
     return {
