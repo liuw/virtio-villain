@@ -6,17 +6,16 @@ removes it. The guest watches the boot blk function's device_status.
 import os
 import time
 
+SUPPORTED_BACKENDS = ("ch",)
+
 
 def run(ctx):
     if ctx.backend.name != "ch":
-        ctx.log("backend is not CH, skipping")
-        return
+        ctx.skip("backend is not CH")
     if ctx.api_sock is None:
-        ctx.log("api socket disabled, skipping")
-        return
+        ctx.skip("api socket disabled")
     if not ctx.wait_text("[vv]", timeout=20.0):
-        ctx.log("guest harness banner not seen")
-        return
+        raise RuntimeError("guest harness banner not seen")
 
     hp_disk = os.path.join(ctx.tmpdir, "pci0200.raw")
     with open(hp_disk, "wb") as f:
