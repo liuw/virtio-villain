@@ -616,7 +616,7 @@ class Qemu(VmmBackend):
                     "-device", blk_dev]
         if want("net"):
             cmd += ["-netdev", netdev, "-device", net_dev]
-        if want("vsock"):
+        if want("vsock") and opts.get("vsock_enabled", True):
             cmd += ["-device",
                     f"vhost-vsock-pci,guest-cid={cid},packed={packed_flag}"]
         if want("balloon"):

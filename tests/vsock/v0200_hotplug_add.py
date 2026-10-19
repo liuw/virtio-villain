@@ -4,9 +4,9 @@ V0200 sidecar. Hot adds a vsock function with cid 44 and id hp_vsock.
 """
 import os
 
-from host_helpers import wait_ready
+from host_helpers import qmp, wait_ready
 
-SUPPORTED_BACKENDS = ("ch",)
+SUPPORTED_BACKENDS = ("ch", "qemu")
 
 
 def vmm_config():
@@ -15,6 +15,14 @@ def vmm_config():
 
 def run(ctx):
     wait_ready(ctx)
+
+    if ctx.backend.name == "qemu":
+        qmp(ctx, "device_add", {
+            "driver": "vhost-vsock-pci", "id": "hp_vsock",
+            "guest-cid": ctx.vmm_pid + 3,
+        })
+        ctx.log("add-vsock completed")
+        return
 
     socket = os.path.join(ctx.tmpdir, "vsock.sock")
     cp = ctx.vm_api("add-vsock", [f"cid=44,id=hp_vsock,socket={socket}"])
