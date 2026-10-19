@@ -1810,8 +1810,7 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
                 extra += "\n" + "\n".join(sidecar_log_lines) + "\n"
             if err is not None:
                 extra += f"\n[vv-sidecar] FAIL: {err[0]}\n{err[1]}\n"
-                if status not in ("WEDGED", "PASS", "SKIP", "REJECT",
-                                  "XFAIL", "XPASS"):
+                if status != "WEDGED":
                     status = "FAIL"
             output += extra
         if sidecar_tmpdir:

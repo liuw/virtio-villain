@@ -1836,6 +1836,39 @@ def test_unit_stderr_does_not_corrupt_verdicts():
 # ---------------------------------------------------------------------------
 # Probe filtering logic.
 
+def test_unit_sidecar_exception_overrides_guest_verdict():
+    """A failed host action must not preserve a successful guest verdict."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    class Backend:
+        name = "fake"
+        console_device = "ttyS0"
+        mmio_transport = False
+
+        def __init__(self, verdict):
+            self.verdict = verdict
+
+        def build_cmd(self, kernel, initramfs, disk_path, cmdline, opts=None):
+            return ["sh", "-c",
+                    f"sleep 0.1; printf '[{self.verdict}] T0001\\n'"]
+
+    def fail_action(ctx):
+        raise RuntimeError("required host action failed")
+
+    sidecar = SimpleNamespace(run=fail_action)
+    for verdict in ("PASS", "REJECT", "SKIP", "XFAIL", "XPASS", "FAIL"):
+        with patch.object(RUN_MOD, "_find_sidecar", return_value="sidecar"), \
+             patch.object(RUN_MOD, "_load_sidecar", return_value=sidecar):
+            results = RUN_MOD.run_test(
+                Backend(verdict), "kernel", "T0001",
+                5, 0, False, "raw", {})
+        _, status, output = results[0]
+        assert status == "FAIL", (verdict, status, output)
+        assert "[vv-sidecar] FAIL: required host action failed" in output
+        assert "RuntimeError" in output
+
+
 def test_unit_probe_filter_excludes_missing_device():
     """Tests targeting a device not in available_devices are excluded."""
     tests = ["RNG0001", "RTC0022", "D0001"]
