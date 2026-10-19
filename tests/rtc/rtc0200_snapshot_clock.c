@@ -12,6 +12,7 @@
 #include "lib/util.h"
 #include "lib/vring.h"
 #include "lib/virtio_pci.h"
+#include "tests/mmio/mmio_helpers.h"
 
 #include <unistd.h>
 
@@ -42,3 +43,5 @@ REGISTER_TEST(RTC0200, VIRTIO_PCI_DEVICE_RTC,
               test_rtc_survives_snapshot,
               "virtio-rtc survives a host triggered snapshot",
               VIRTIO_SPEC_V1_4, "2.6");
+
+REGISTER_MMIO_VARIANT(RTC0200, 17, mmio_watch_status);

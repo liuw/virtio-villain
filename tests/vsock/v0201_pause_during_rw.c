@@ -12,6 +12,7 @@
 #include "lib/vring.h"
 #include "lib/virtio_pci.h"
 #include "lib/virtio_spec.h"
+#include "tests/mmio/mmio_helpers.h"
 
 #include <unistd.h>
 
@@ -42,3 +43,5 @@ REGISTER_TEST(V0201, VIRTIO_PCI_DEVICE_VSOCK,
               test_vsock_survives_pause,
               "virtio-vsock survives a pause and resume cycle",
               VIRTIO_SPEC_V1_2, "2.6");
+
+REGISTER_MMIO_VARIANT(V0201, 19, mmio_watch_status);
