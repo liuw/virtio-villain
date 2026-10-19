@@ -10,11 +10,14 @@ and exit codes, prints a summary.
 import argparse
 import fnmatch
 import json
+import hashlib
+import mmap
 import os
 import random
 import re
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 import termios
@@ -1150,6 +1153,94 @@ def _find_virtiofsd():
 # 5s ceiling when ch-remote and the CH API thread are CPU starved.
 _VM_API_TIMEOUT = 5.0
 _SIDECAR_JOIN_TIMEOUT = 5.0
+_PROBE_CACHE_DIR = f"/dev/shm/virtio-villain-probes-{os.getuid()}"
+_PROBE_CACHE_SIZE = 65536
+
+
+def _probe_cache_key(backend, kernel, initramfs, opts):
+    identities = []
+    for path in (backend.binary, kernel, initramfs, __file__):
+        path = os.path.realpath(path)
+        stat = os.stat(path)
+        identities.append((path, stat.st_dev, stat.st_ino, stat.st_size,
+                           stat.st_mtime_ns, stat.st_ctime_ns))
+    with open("/proc/sys/kernel/random/boot_id") as stream:
+        boot_id = stream.read().strip()
+    data = (boot_id, platform.machine(), backend.name, identities, opts)
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+
+
+def _probe_records(output):
+    records = []
+    for line in output.decode(errors="replace").splitlines():
+        if not line.startswith("PROBE\t"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 4:
+            raise ValueError(f"incomplete probe record: {line!r}")
+        records.append((
+            int(parts[1], 16), int(parts[2], 16), int(parts[3]),
+            int(parts[4]) if len(parts) >= 5 else 1,
+            int(parts[5]) if len(parts) >= 6 else 1))
+    if not records:
+        raise ValueError("probe returned no device records")
+    return records
+
+
+def _read_probe_cache(fd):
+    if os.fstat(fd).st_size != _PROBE_CACHE_SIZE:
+        return None
+    with mmap.mmap(fd, _PROBE_CACHE_SIZE,
+                   access=mmap.ACCESS_READ) as memory:
+        length = int.from_bytes(memory[:8], "little")
+        if length == 0:
+            return None
+        return _probe_records(memory[8:8 + length])
+
+
+def _cached_probe(key, probe):
+    """Reuse shared probe results independently of the launching process."""
+    os.makedirs(_PROBE_CACHE_DIR, mode=0o700, exist_ok=True)
+    directory = os.stat(_PROBE_CACHE_DIR, follow_symlinks=False)
+    if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != os.getuid()
+            or stat.S_IMODE(directory.st_mode) != 0o700):
+        raise RuntimeError(f"unsafe probe cache directory: {_PROBE_CACHE_DIR}")
+    cache_key = key() if callable(key) else key
+    path = os.path.join(_PROBE_CACHE_DIR, cache_key)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            try:
+                cached = _read_probe_cache(fd)
+                if cached is not None:
+                    return cached
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+
+        records = _probe_records(probe())
+        payload = "".join(
+            f"PROBE\t{dev:x}\t{features:x}\t{queues}\t{isr}\t{cfg}\n"
+            for dev, features, queues, isr, cfg in records).encode()
+        if len(payload) > _PROBE_CACHE_SIZE - 8:
+            raise ValueError("capability probe exceeds shared memory size")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return records
+        if _read_probe_cache(fd) is not None:
+            return records
+        os.ftruncate(fd, _PROBE_CACHE_SIZE)
+        with mmap.mmap(fd, _PROBE_CACHE_SIZE) as memory:
+            memory[:8] = bytes(8)
+            memory[8:8 + len(payload)] = payload
+            memory[:8] = len(payload).to_bytes(8, "little")
+        return records
+    finally:
+        os.close(fd)
 
 
 def vm_api(api_socket, backend, command, args=None, timeout=None):
@@ -2741,81 +2832,60 @@ def main():
 
     # Probe VMM for available devices when --skip-unsupported is set.
     if args.skip_unsupported:
-        probe_disk = tempfile.mktemp(suffix=".raw")
-        with open(probe_disk, "wb") as f:
-            f.truncate(DISK_SIZE)
-        probe_pmem = probe_disk.rsplit(".", 1)[0] + ".pmem"
-        with open(probe_pmem, "wb") as f:
-            f.truncate(128 * 1024 * 1024)
-        probe_scsi = probe_disk.rsplit(".", 1)[0] + ".scsi"
-        with open(probe_scsi, "wb") as f:
-            f.truncate(DISK_SIZE)
-        probe_scsi2 = probe_disk.rsplit(".", 1)[0] + ".scsi2"
-        with open(probe_scsi2, "wb") as f:
-            f.truncate(DISK_SIZE)
-        probe_opts = dict(vm_opts)
-        probe_opts["pmem_path"] = probe_pmem
-        probe_opts["scsi_path"] = probe_scsi
-        probe_opts["scsi_path2"] = probe_scsi2
-        probe_opts.pop("api_enabled", None)
-        probe_opts.pop("api_socket", None)
-        skip_ic = [
-            "virtio_blk_init", "virtio_scsi_init",
-            "virtio_net_driver_init",
-            "virtio_console_init", "virtio_balloon_driver_init",
-            "virtio_rng_driver_init", "virtio_mem_driver_init",
-            "virtio_pmem_driver_init", "virtio_iommu_drv_init",
-            "virtio_fs_init", "virtio_vsock_init",
-            "virtio_rtc_drv_init", "virtio_watchdog_driver_init",
-            "virtio_input_driver_init",
-        ]
-        probe_cmdline = (f"console={backend.console_device} "
-                         f"initcall_blacklist={','.join(skip_ic)} "
-                         f"vv.test=probe")
-        probe_cmd = backend.build_cmd(
-            kernel, args.initramfs, probe_disk, probe_cmdline, probe_opts)
+        def probe():
+            with tempfile.TemporaryDirectory(prefix="vv-probe-") as directory:
+                probe_opts = dict(vm_opts)
+                probe_disk = os.path.join(directory, "disk.raw")
+                for path, size in (
+                        (probe_disk, DISK_SIZE),
+                        (os.path.join(directory, "pmem"), 128 * 1024 * 1024),
+                        (os.path.join(directory, "scsi"), DISK_SIZE),
+                        (os.path.join(directory, "scsi2"), DISK_SIZE)):
+                    with open(path, "wb") as image:
+                        image.truncate(size)
+                probe_opts["pmem_path"] = os.path.join(directory, "pmem")
+                probe_opts["scsi_path"] = os.path.join(directory, "scsi")
+                probe_opts["scsi_path2"] = os.path.join(directory, "scsi2")
+                probe_opts.pop("api_enabled", None)
+                probe_opts.pop("api_socket", None)
+                skip_ic = [
+                    "virtio_blk_init", "virtio_scsi_init",
+                    "virtio_net_driver_init",
+                    "virtio_console_init", "virtio_balloon_driver_init",
+                    "virtio_rng_driver_init", "virtio_mem_driver_init",
+                    "virtio_pmem_driver_init", "virtio_iommu_drv_init",
+                    "virtio_fs_init", "virtio_vsock_init",
+                    "virtio_rtc_drv_init", "virtio_watchdog_driver_init",
+                    "virtio_input_driver_init",
+                ]
+                probe_cmdline = (f"console={backend.console_device} "
+                                 f"initcall_blacklist={','.join(skip_ic)} "
+                                 f"vv.test=probe")
+                probe_cmd = backend.build_cmd(
+                    kernel, args.initramfs, probe_disk,
+                    probe_cmdline, probe_opts)
+                result = subprocess.run(
+                    probe_cmd, stdin=subprocess.DEVNULL,
+                    capture_output=True, timeout=15,
+                    start_new_session=True)
+                return result.stdout
+
         available_devices = set()
         available_features = {}
         available_queues = {}
         available_caps = {}
         try:
-            result = subprocess.run(
-                probe_cmd, stdin=subprocess.DEVNULL,
-                capture_output=True, timeout=15,
-                start_new_session=True)
-            for line in result.stdout.decode(errors="replace").splitlines():
-                if line.startswith("PROBE\t"):
-                    parts = line.split("\t")
-                    if len(parts) >= 4:
-                        dev_id = int(parts[1], 16)
-                        features = int(parts[2], 16)
-                        nq = int(parts[3])
-                        has_isr = int(parts[4]) if len(parts) >= 5 else 1
-                        has_cfg = int(parts[5]) if len(parts) >= 6 else 1
-                        available_devices.add(dev_id)
-                        available_features[dev_id] = features
-                        available_queues[dev_id] = nq
-                        available_caps[dev_id] = (has_isr, has_cfg)
-        except (subprocess.TimeoutExpired, OSError):
-            pass
-        finally:
-            try:
-                os.unlink(probe_disk)
-            except FileNotFoundError:
-                pass
-            try:
-                os.unlink(probe_pmem)
-            except FileNotFoundError:
-                pass
-            try:
-                os.unlink(probe_scsi)
-            except FileNotFoundError:
-                pass
-            try:
-                os.unlink(probe_scsi2)
-            except FileNotFoundError:
-                pass
-
+            for dev_id, features, nq, has_isr, has_cfg in _cached_probe(
+                    lambda: _probe_cache_key(
+                        backend, kernel, args.initramfs, vm_opts), probe):
+                available_devices.add(dev_id)
+                available_features[dev_id] = features
+                available_queues[dev_id] = nq
+                available_caps[dev_id] = (has_isr, has_cfg)
+        except (subprocess.TimeoutExpired, OSError,
+                ValueError, RuntimeError) as error:
+            print(f"Warning: capability probe unavailable: {error}. "
+                  "Running without capability filtering.", file=human)
         if available_devices:
             before = len(tests)
             filtered = []

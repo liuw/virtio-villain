@@ -317,6 +317,9 @@ not change source lookup for sidecars or shared helpers. Python callers
 can use `get_test_list(init_binary=...)` and pass
 `opts={"initramfs": ...}` to `run_test`.
 
+With `--skip-unsupported`, capability probe results are reused
+automatically when the inputs and VM options are unchanged.
+
 For correctness runs keep `--jobs` modest. Heavy oversubscription
 (many parallel VMs each with several vCPUs on fewer host cores) starves
 the guests of CPU time and can make a stable test fail once. The runner

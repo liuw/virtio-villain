@@ -68,6 +68,210 @@ def run_runner(*args):
     return result
 
 
+def test_unit_probe_cache_shares_and_recovers():
+    import multiprocessing
+    from unittest.mock import patch
+
+    context = multiprocessing.get_context("fork")
+    output = b"PROBE\t0x1042\t0x1234\t4\t1\t0\n"
+    expected = [(0x1042, 0x1234, 4, 1, 0)]
+    key = "a" * 64
+    with tempfile.TemporaryDirectory() as directory, \
+         patch.object(RUN_MOD, "_PROBE_CACHE_DIR", directory):
+        counter = context.Value("i", 0)
+        results = context.Queue()
+
+        def probe():
+            import time
+            with counter.get_lock():
+                counter.value += 1
+            time.sleep(0.1)
+            return output
+
+        def worker():
+            results.put(RUN_MOD._cached_probe(key, probe))
+
+        workers = [context.Process(target=worker) for _ in range(6)]
+        try:
+            for process in workers:
+                process.start()
+            for process in workers:
+                process.join(timeout=5)
+                assert process.exitcode == 0, process.exitcode
+            assert [results.get(timeout=1) for _ in workers] == [expected] * 6
+            probes = counter.value
+            assert 1 <= probes <= 6, probes
+            repeat = context.Process(target=worker)
+            workers.append(repeat)
+            repeat.start()
+            repeat.join(timeout=5)
+            assert repeat.exitcode == 0
+            assert results.get(timeout=1) == expected
+            assert counter.value == probes
+            assert RUN_MOD._cached_probe(key, probe) == expected
+            assert counter.value == probes
+        finally:
+            for process in workers:
+                if process.is_alive():
+                    process.terminate()
+                    process.join()
+            results.close()
+            results.join_thread()
+
+        failed_key = "b" * 64
+
+        def crash():
+            RUN_MOD._cached_probe(failed_key, lambda: os._exit(7))
+
+        process = context.Process(target=crash)
+        process.start()
+        process.join(timeout=5)
+        if process.is_alive():
+            process.terminate()
+            process.join()
+            raise AssertionError("crashed probe did not exit")
+        assert process.exitcode == 7
+
+        def recover():
+            assert RUN_MOD._cached_probe(failed_key, lambda: output) == expected
+
+        process = context.Process(target=recover)
+        process.start()
+        process.join(timeout=5)
+        if process.is_alive():
+            process.terminate()
+            process.join()
+            raise AssertionError("probe cache lock was not released")
+        assert process.exitcode == 0
+
+        for invalid in (b"", b"PROBE\tbroken\n", b"PROBE\tx\ty\tz\n"):
+            invalid_key = "c" * 64
+            try:
+                RUN_MOD._cached_probe(invalid_key, lambda: invalid)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("invalid probe was accepted")
+        assert RUN_MOD._cached_probe(invalid_key, lambda: output) == expected
+
+
+def test_unit_probe_cache_identity_and_shared_readers():
+    import fcntl
+    import time
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory() as directory, \
+         patch.object(RUN_MOD, "_PROBE_CACHE_DIR", directory):
+        paths = [os.path.join(directory, name)
+                 for name in ("vmm", "kernel", "initramfs")]
+        for path in paths:
+            with open(path, "w") as stream:
+                stream.write("initial")
+        backend = SimpleNamespace(binary=paths[0], name="ch")
+        key = RUN_MOD._probe_cache_key(backend, *paths[1:], {"memory": "512M"})
+        assert key == RUN_MOD._probe_cache_key(
+            backend, *paths[1:], {"memory": "512M"})
+        assert key != RUN_MOD._probe_cache_key(
+            backend, *paths[1:], {"memory": "1G"})
+        for path in paths:
+            with open(path, "a") as stream:
+                stream.write("changed")
+            updated = RUN_MOD._probe_cache_key(
+                backend, *paths[1:], {"memory": "512M"})
+            assert updated != key
+            key = updated
+        result = RUN_MOD._cached_probe(
+            key, lambda: b"PROBE\t1042\t0\t1\n")
+        assert result == [(0x1042, 0, 1, 1, 1)]
+        segment = os.path.join(directory, key)
+        with open(segment, "rb") as stream:
+            before = stream.read()
+        calls = []
+        with open(segment, "r+b") as locked:
+            fcntl.flock(locked, fcntl.LOCK_SH)
+            started = time.monotonic()
+            result = RUN_MOD._cached_probe(key, lambda: (
+                calls.append(True) or b"PROBE\t1042\t1\t2\n"))
+            assert time.monotonic() - started < 0.5
+            assert result == [(0x1042, 0, 1, 1, 1)]
+            assert calls == []
+            fcntl.flock(locked, fcntl.LOCK_EX)
+            started = time.monotonic()
+            result = RUN_MOD._cached_probe(key, lambda: (
+                calls.append(True) or b"PROBE\t1042\t1\t2\n"))
+            assert time.monotonic() - started < 0.5
+            assert result == [(0x1042, 1, 2, 1, 1)]
+            assert calls == [True]
+        with open(segment, "rb") as stream:
+            assert stream.read() == before
+        retry_key = "e" * 64
+        def racing_probe():
+            RUN_MOD._cached_probe(
+                retry_key, lambda: b"PROBE\t1042\t2\t3\n")
+            return b"PROBE\t1042\t4\t5\n"
+
+        assert RUN_MOD._cached_probe(retry_key, racing_probe) == [
+            (0x1042, 4, 5, 1, 1)]
+
+        def unexpected_probe():
+            raise AssertionError("racing result was not published")
+
+        assert RUN_MOD._cached_probe(retry_key, unexpected_probe) == [
+            (0x1042, 2, 3, 1, 1)]
+        calls = []
+        RUN_MOD._cached_probe("d" * 64, lambda: (
+            calls.append(True) or b"PROBE\t1042\t0\t1\n"))
+        assert calls == [True]
+
+
+def test_unit_probe_cache_hit_prepares_nothing():
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    with tempfile.TemporaryDirectory() as directory:
+        backend = SimpleNamespace(
+            name="ch", mmio_transport=False, console_device="ttyS0",
+            build_cmd=Mock(return_value=["probe-vmm"]))
+        metadata = {"RTC0200": {
+            "device_id": 0x1051, "required_features": 0,
+            "flags": 0, "min_queues": 0}}
+        argv = [RUN, "--vmm", MOCK_LINK, "--kernel", "/dev/null",
+                "--initramfs", RUN, "--skip-unsupported", "RTC0200"]
+        with patch.object(RUN_MOD, "_PROBE_CACHE_DIR", directory), \
+             patch.object(RUN_MOD, "_SCRIPT_DIR", directory), \
+             patch.object(RUN_MOD, "_probe_cache_key", return_value="f" * 64), \
+             patch.object(RUN_MOD, "detect_vmm", return_value=backend), \
+             patch.object(RUN_MOD, "print_banner"), \
+             patch.object(RUN_MOD, "_install_termination_as_interrupt"), \
+             patch.object(RUN_MOD, "get_test_list", return_value=(
+                 ["RTC0200"], {}, metadata)), \
+             patch.object(sys, "argv", argv):
+            def main():
+                try:
+                    RUN_MOD.main()
+                except SystemExit as error:
+                    assert error.code == 0
+
+            with patch.object(RUN_MOD.subprocess, "run", return_value=(
+                    subprocess.CompletedProcess(
+                        [], 0, b"PROBE\t1042\t0\t1\n", b""))) as launch:
+                main()
+            launch.assert_called_once()
+            backend.build_cmd.assert_called_once()
+            probe_disk = backend.build_cmd.call_args.args[2]
+            assert not os.path.exists(os.path.dirname(probe_disk))
+            backend.build_cmd.reset_mock()
+            with patch.object(RUN_MOD.tempfile, "TemporaryDirectory") as prepare, \
+                 patch.object(RUN_MOD.subprocess, "run") as launch, \
+                 patch.object(RUN_MOD, "run_test") as run_case:
+                main()
+            prepare.assert_not_called()
+            backend.build_cmd.assert_not_called()
+            launch.assert_not_called()
+            run_case.assert_not_called()
+
+
 def test_artifact_paths():
     from unittest.mock import patch
 
