@@ -146,7 +146,7 @@ the VMM under test exposes the device).
 | -      | 5.21 | SPI Controller                       | no  |
 | -      | 5.22 | Media                                | no  |
 | RTC    | 5.23 | RTC / Clock                          | yes |
-| PLAN9  | ID 9 only | 9P transport                    | yes |
+| PLAN9  | ID 9 only | 9P state, walk, and attribute handling | yes |
 | D      | ID 35 only | Watchdog                       | yes |
 | J      | ID 40 only | Bluetooth                      | reserved |
 | -      | ID 38 only | Parameter Server               | no  |
