@@ -7,12 +7,16 @@ from host_helpers import qmp
 
 
 def wait_armed(ctx):
-    if ctx.backend.name != "qemu":
+    if ctx.backend.name not in ("qemu", "qemu-mmio"):
         ctx.skip("backend is not QEMU")
     if ctx.api_sock is None:
         ctx.skip("api socket disabled")
     if not ctx.wait_text("vv-scsi-armed", timeout=20.0):
         raise RuntimeError("guest did not arm the event queue")
+
+
+def scsi_config():
+    return {"opts": {"mmio_device": "scsi"}}
 
 
 def hot_add(ctx):

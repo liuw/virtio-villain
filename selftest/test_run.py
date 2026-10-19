@@ -1363,7 +1363,8 @@ def test_unit_qemu_microvm_selects_sidecar_device():
             ("balloon", "virtio-balloon-device"),
             ("rtc", "virtio-rtc-device"),
             ("console", "virtio-serial-device"),
-            ("vsock", "vhost-vsock-device")):
+            ("vsock", "vhost-vsock-device"),
+            ("scsi", "virtio-scsi-device")):
         cmd = be.build_cmd("/k", "/i", "/d.raw", "console=ttyS0",
                            {"mmio_device": device,
                             "scsi_path": "/scsi.raw",
@@ -1375,6 +1376,16 @@ def test_unit_qemu_microvm_selects_sidecar_device():
                       "virtio-serial-device", "vhost-vsock-device",
                       "virtio-scsi-device")]
         assert models == [model], (device, models)
+        if device == "scsi":
+            assert ("virtio-scsi-device,id=scsi0,num_queues=4") in cmd
+            assert "file=/scsi.raw,if=none,id=scsidisk,format=raw" in cmd
+            assert "file=/scsi2.raw,if=none,id=scsidisk2,format=raw" in cmd
+            assert any(arg.startswith(
+                "scsi-hd,drive=scsidisk,bus=scsi0.0,channel=0,scsi-id=0,lun=0")
+                for arg in cmd)
+            assert any(arg.startswith(
+                "scsi-hd,drive=scsidisk2,bus=scsi0.0,channel=0,scsi-id=0,lun=1")
+                for arg in cmd)
     try:
         be.build_cmd("/k", "/i", "/d.raw", "", {"mmio_device": "unknown"})
     except ValueError as error:

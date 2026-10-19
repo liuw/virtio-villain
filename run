@@ -683,27 +683,29 @@ class Qemu(VmmBackend):
         # needed so a SCSI READ reaches the block backend. A second LUN
         # with a 4K logical block exercises multi LUN addressing and non
         # 512 geometry, and multiple request queues are advertised.
-        scsi_path = opts.get("scsi_path")
-        if scsi_path and want("scsi"):
-            scsi_path2 = opts.get("scsi_path2")
-            cmd += [
-                "-drive", f"file={scsi_path},if=none,id=scsidisk,format=raw",
-                "-drive", f"file={scsi_path2},if=none,id=scsidisk2,format=raw",
-                "-device",
-                f"virtio-scsi-pci-non-transitional,id=scsi0"
-                f",packed={packed_flag},num_queues=4",
-                "-device",
-                "scsi-hd,drive=scsidisk,bus=scsi0.0,channel=0"
-                ",scsi-id=0,lun=0,serial=vvscsi0",
-                "-device",
-                "scsi-hd,drive=scsidisk2,bus=scsi0.0,channel=0"
-                ",scsi-id=0,lun=1,logical_block_size=4096"
-                ",physical_block_size=4096,serial=vvscsi1",
-            ]
+        if opts.get("scsi_path") and want("scsi"):
+            cmd += self._scsi_args(
+                opts, f"virtio-scsi-pci-non-transitional,id=scsi0"
+                f",packed={packed_flag},num_queues=4")
         if api_socket:
             cmd += ["-qmp", f"unix:{api_socket},server=on,wait=off"]
         cmd[1:1] = self.trace_args(opts)
         return cmd
+
+    @staticmethod
+    def _scsi_args(opts, controller):
+        return [
+            "-drive", f"file={opts['scsi_path']},if=none,id=scsidisk,format=raw",
+            "-drive", f"file={opts['scsi_path2']},if=none,id=scsidisk2,format=raw",
+            "-device", controller,
+            "-device",
+            "scsi-hd,drive=scsidisk,bus=scsi0.0,channel=0"
+            ",scsi-id=0,lun=0,serial=vvscsi0",
+            "-device",
+            "scsi-hd,drive=scsidisk2,bus=scsi0.0,channel=0"
+            ",scsi-id=0,lun=1,logical_block_size=4096"
+            ",physical_block_size=4096,serial=vvscsi1",
+        ]
 
 
 class QemuMicrovm(VmmBackend):
@@ -758,6 +760,9 @@ class QemuMicrovm(VmmBackend):
                     "-chardev", "null,id=console-output",
                     "-device",
                     "virtconsole,bus=console0.0,chardev=console-output"]
+        elif device == "scsi":
+            cmd += Qemu._scsi_args(
+                opts, "virtio-scsi-device,id=scsi0,num_queues=4")
         else:
             raise ValueError(f"unsupported MMIO device: {device}")
         if arch != "aarch64":

@@ -7,9 +7,10 @@ reason. QEMU only.
 
 import time
 
-from scsi.scsi_helpers import hot_add, qmp, wait_armed
+from scsi.scsi_helpers import hot_add, qmp, scsi_config, wait_armed
 
-SUPPORTED_BACKENDS = ("qemu",)
+SUPPORTED_BACKENDS = ("qemu", "qemu-mmio")
+vmm_config = scsi_config
 
 
 def run(ctx):
