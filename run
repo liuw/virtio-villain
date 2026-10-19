@@ -52,6 +52,7 @@ def _bump_maxmem(mem_str):
 
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+INIT_BINARY = os.path.join(_SCRIPT_DIR, "target", "init")
 INITRAMFS = os.path.join(_SCRIPT_DIR, "target", "initramfs.cpio.gz")
 DISK_SIZE = 16 * 1024 * 1024  # 16 MiB
 DISK_FORMATS = ("raw", "qcow2", "vhd", "vhdx")
@@ -348,12 +349,11 @@ def enable_sysconfigs(vmm_path=None):
             pass
 
 
-def print_banner(f=sys.stderr):
+def print_banner(f=sys.stderr, init_binary=INIT_BINARY):
     """Emit the virtio-villain banner. Sourced from target/init
     --banner when available so the artwork lives in one place."""
-    init_bin = os.path.join(_SCRIPT_DIR, "target", "init")
     try:
-        out = subprocess.check_output([init_bin, "--banner"],
+        out = subprocess.check_output([init_binary, "--banner"],
                                       stderr=subprocess.DEVNULL)
         f.write(out.decode())
         f.flush()
@@ -917,7 +917,7 @@ def fetch_kernel():
     return cache_path
 
 
-def get_test_list(init_binary=os.path.join(_SCRIPT_DIR, "target", "init")):
+def get_test_list(init_binary=INIT_BINARY):
     """Get available tests by running target/init --list-tsv on the host.
 
     Returns (list of test IDs, dict mapping ID to (desc, ver, section),
@@ -1407,6 +1407,8 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
     batch and each gets its own verdict line in the output. Sidecar
     scripts are only supported for single test runs.
 
+    opts["initramfs"] selects a guest archive without changing source paths.
+
     Returns a list of (name, status, output) tuples.
     """
     if isinstance(test_name, str):
@@ -1543,7 +1545,8 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
     # build_cmd already understands, so the runner stays test agnostic.
     for key, value in sidecar_cfg.get("opts", {}).items():
         opts[key] = value
-    cmd = backend.build_cmd(kernel, INITRAMFS, disk_path, cmdline, opts)
+    cmd = backend.build_cmd(
+        kernel, opts.get("initramfs", INITRAMFS), disk_path, cmdline, opts)
 
     if verbose >= 1:
         with _print_lock:
@@ -2451,7 +2454,6 @@ class ShortFirstHelpFormatter(argparse.RawDescriptionHelpFormatter):
 
 
 def main():
-    print_banner(sys.stderr)
     parser = argparse.ArgumentParser(
         description="virtio-villain test runner",
         formatter_class=ShortFirstHelpFormatter,
@@ -2474,6 +2476,11 @@ def main():
                        help="Path to the VMM binary (required)")
     g_vmm.add_argument("-k", "--kernel", default=None, metavar="PATH",
                        help="Guest kernel, fetched automatically if omitted")
+    g_vmm.add_argument("--init", default=None, metavar="PATH",
+                       help="Host executable for test discovery "
+                            "(default: target/init)")
+    g_vmm.add_argument("--initramfs", default=INITRAMFS, metavar="PATH",
+                       help="Guest archive (default: target/initramfs.cpio.gz)")
     g_vmm.add_argument("-s", "--cpus", type=int, default=None, metavar="N",
                        help="vCPUs per VM (default: 4 CH, 1 QEMU)")
     g_vmm.add_argument("-M", "--memory", default="512M", type=_normalize_mem,
@@ -2569,6 +2576,10 @@ def main():
                          default=argparse.SUPPRESS,
                          help="Show this help message and exit")
     args = parser.parse_args()
+    if args.init is not None:
+        if not os.path.isfile(args.init) or not os.access(args.init, os.X_OK):
+            sys.exit(f"{args.init} is not an executable init binary")
+    print_banner(sys.stderr, init_binary=args.init or INIT_BINARY)
 
     _install_termination_as_interrupt()
 
@@ -2602,6 +2613,7 @@ def main():
                  f"backend")
 
     vm_opts = {
+        "initramfs": args.initramfs,
         "cpus": args.cpus if args.cpus else (
             4 if backend.name in ("ch", "openvmm") else 1),
         "memory": args.memory,
@@ -2670,21 +2682,25 @@ def main():
     if args.log_dir:
         os.makedirs(args.log_dir, exist_ok=True)
 
-    if not os.path.isfile(INITRAMFS):
-        sys.exit(f"{INITRAMFS} not found. Run 'make initramfs' first.")
+    if not os.path.isfile(args.initramfs):
+        sys.exit(f"{args.initramfs} not found. Run 'make initramfs' first "
+                 "or select an archive with --initramfs.")
 
     if args.tests:
         tests = args.tests
-        try:
-            known, test_info, _test_meta = get_test_list()
-        except (FileNotFoundError, OSError, SystemExit):
-            known, test_info, _test_meta = [], {}, {}
+        if args.init is not None:
+            known, test_info, _test_meta = get_test_list(args.init)
+        else:
+            try:
+                known, test_info, _test_meta = get_test_list()
+            except (FileNotFoundError, OSError, SystemExit):
+                known, test_info, _test_meta = [], {}, {}
         if known and not os.environ.get("VV_ALLOW_UNKNOWN_TESTS"):
             tests, unknown = _canonicalize_tests(tests, known)
             if unknown:
                 sys.exit(f"Unknown test name(s): {', '.join(unknown)}")
     else:
-        tests, test_info, _test_meta = get_test_list()
+        tests, test_info, _test_meta = get_test_list(args.init or INIT_BINARY)
 
     tests = filter_tests(tests, args.include, args.exclude,
                          args.dirs, args.exclude_dir)
@@ -2704,7 +2720,7 @@ def main():
         with open(probe_disk, "wb") as f:
             f.truncate(DISK_SIZE)
         probe_cmd = mmio_backend.build_cmd(
-            kernel, INITRAMFS, probe_disk,
+            kernel, args.initramfs, probe_disk,
             f"console={mmio_backend.console_device} vv.test=list")
         probe_ok = False
         try:
@@ -2757,7 +2773,7 @@ def main():
                          f"initcall_blacklist={','.join(skip_ic)} "
                          f"vv.test=probe")
         probe_cmd = backend.build_cmd(
-            kernel, INITRAMFS, probe_disk, probe_cmdline, probe_opts)
+            kernel, args.initramfs, probe_disk, probe_cmdline, probe_opts)
         available_devices = set()
         available_features = {}
         available_queues = {}

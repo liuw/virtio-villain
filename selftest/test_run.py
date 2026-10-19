@@ -68,6 +68,54 @@ def run_runner(*args):
     return result
 
 
+def test_artifact_paths():
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory(prefix="vv artifacts ") as directory:
+        init = os.path.join(directory, "init")
+        archive = os.path.join(directory, "initramfs.cpio.gz")
+        with open(init, "w") as script:
+            script.write(
+                "#!/bin/sh\n"
+                "case \"$1\" in\n"
+                "  --banner) echo CUSTOM-BANNER ;;\n"
+                "  --list-tsv) printf 'PASS\\tCustom case\\t1.4\\t2.6\\n' ;;\n"
+                "  *) exit 1 ;;\n"
+                "esac\n")
+        os.chmod(init, 0o755)
+        with open(archive, "wb"):
+            pass
+        result = run_runner("--init", init, "--initramfs", archive, "-v")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "CUSTOM-BANNER" in result.stderr
+        assert "Custom case" in result.stdout
+        assert archive in result.stdout
+        assert "[PASS]" in result.stdout
+
+        missing = os.path.join(directory, "missing")
+        result = run_runner("--init", missing, "PASS")
+        assert result.returncode != 0
+        assert "not an executable init binary" in result.stderr
+        result = run_runner("--initramfs", missing, "PASS")
+        assert result.returncode != 0
+        assert "--initramfs" in result.stderr
+        with open(init, "w") as script:
+            script.write("#!/bin/sh\nexit 1\n")
+        result = run_runner("--init", init, "PASS")
+        assert result.returncode != 0
+        assert "Failed to list tests" in result.stderr
+
+        backend = RUN_MOD.CloudHypervisor(MOCK_LINK)
+        with patch.object(RUN_MOD, "_SCRIPT_DIR", ROOT_DIR), \
+             patch.object(backend, "build_cmd", wraps=backend.build_cmd) as build:
+            results = RUN_MOD.run_test(
+                backend, "kernel", "PASS", 5, opts={"initramfs": archive})
+            assert RUN_MOD._find_sidecar("B0200") == os.path.join(
+                ROOT_DIR, "tests", "blk", "b0200_hotplug_add.py")
+        assert results[0][1] == "PASS", results
+        assert build.call_args.args[1] == archive
+
+
 def test_pass():
     """Test that a passing test is reported correctly."""
     r = run_runner("PASS")

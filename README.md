@@ -300,6 +300,7 @@ Pipe to a file or through `| cat` to suppress colors.
 
 ```bash
 ./run -m ./cloud-hypervisor -k /path/to/vmlinux            # custom kernel
+./run -m ./cloud-hypervisor --init /build/init --initramfs /build/initramfs.cpio.gz
 ./run -m ./cloud-hypervisor -d qcow2                       # use qcow2 backing
 ./run -m ./cloud-hypervisor M01                            # MMIO test, auto launches QEMU microvm if needed
 ./run -m ./qemu-system-x86_64                              # QEMU backend
@@ -308,6 +309,13 @@ Pipe to a file or through `| cat` to suppress colors.
 ./run -m ./cloud-hypervisor -c T01                         # forward guest console to stdout
 ./run -m ./cloud-hypervisor --retries 4 T01               # retry a failure up to 4 times, list it retried if it recovers
 ```
+
+Use `--init` to select a host executable for test discovery and the
+banner and `--initramfs` to select the matching guest archive. Defaults
+remain `target/init` and `target/initramfs.cpio.gz`. These options do
+not change source lookup for sidecars or shared helpers. Python callers
+can use `get_test_list(init_binary=...)` and pass
+`opts={"initramfs": ...}` to `run_test`.
 
 For correctness runs keep `--jobs` modest. Heavy oversubscription
 (many parallel VMs each with several vCPUs on fewer host cores) starves
