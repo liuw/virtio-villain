@@ -1419,6 +1419,13 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
     else:
         test_names = list(test_name)
     batch = len(test_names) > 1
+    sidecar_path = _find_sidecar(test_names[0]) if not batch else None
+    sidecar_mod = _load_sidecar(sidecar_path) if sidecar_path else None
+    supported = getattr(sidecar_mod, "SUPPORTED_BACKENDS", None)
+    if supported is not None and backend.name not in supported:
+        output = (f"[vv-sidecar] SKIP: backend {backend.name} is not "
+                  f"supported by {os.path.basename(sidecar_path)}\n")
+        return [(test_names[0], "SKIP", output)]
     # A batch runs every test in one VM, so the timeout budget scales
     # with the number of tests. A single per test timeout routinely
     # trips under heavy parallelism and kills the VM mid batch, wedging
@@ -1441,8 +1448,6 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
 
     # Optional per test sidecar (single test only). It may declare launch
     # requirements via vmm_config() and/or a run(ctx) host actor.
-    sidecar_path = _find_sidecar(test_names[0]) if not batch else None
-    sidecar_mod = _load_sidecar(sidecar_path) if sidecar_path else None
     sidecar_cfg = {}
     if sidecar_mod is not None and hasattr(sidecar_mod, "vmm_config"):
         sidecar_cfg = sidecar_mod.vmm_config() or {}

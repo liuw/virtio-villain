@@ -4,6 +4,8 @@ V0201 sidecar. Pauses then resumes the running VM.
 """
 import time
 
+SUPPORTED_BACKENDS = ("ch",)
+
 
 def run(ctx):
     if ctx.backend.name != "ch":
