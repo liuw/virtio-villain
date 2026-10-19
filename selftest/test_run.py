@@ -1956,10 +1956,13 @@ def test_unit_ch_sidecar_outcomes():
             ctx.vm_api.assert_not_called()
 
         with tempfile.TemporaryDirectory() as tmpdir, patch("time.sleep"):
+            disk = os.path.join(tmpdir, "disk.raw")
+            with open(disk, "wb") as image:
+                image.truncate(16 * 1024 * 1024)
             success = subprocess.CompletedProcess([], 0, "", "")
             ctx = SimpleNamespace(
                 backend=SimpleNamespace(name="ch"), api_sock="api",
-                tmpdir=tmpdir, skip=skip,
+                tmpdir=tmpdir, disk=disk, skip=skip,
                 wait_text=Mock(return_value=True), log=Mock(),
                 vm_api=Mock(return_value=success))
             sidecar.run(ctx)
@@ -1972,7 +1975,8 @@ def test_unit_ch_sidecar_outcomes():
             for index, command in enumerate(commands):
                 for failure in (
                         subprocess.CompletedProcess([], 1, "out", "err"),
-                        RuntimeError("API connection failed")):
+                        RuntimeError("API connection failed"),
+                        subprocess.TimeoutExpired(command.args[0], 30)):
                     ctx.log.reset_mock()
                     ctx.vm_api.reset_mock()
                     ctx.vm_api.side_effect = (
@@ -1980,8 +1984,8 @@ def test_unit_ch_sidecar_outcomes():
                         [success] * len(commands))
                     try:
                         sidecar.run(ctx)
-                    except RuntimeError as error:
-                        if isinstance(failure, RuntimeError):
+                    except (RuntimeError, subprocess.TimeoutExpired) as error:
+                        if isinstance(failure, Exception):
                             assert error is failure, (path, str(error))
                         else:
                             assert command.args[0] in str(error), (
