@@ -2245,19 +2245,21 @@ def test_unit_sidecar_outcomes():
     def skip(reason):
         raise RUN_MOD._SidecarSkip(reason)
 
-    checked = []
+    cases = []
     for path in sorted(glob.glob(
             os.path.join(ROOT_DIR, "tests", "*", "*.py"))):
         sidecar = RUN_MOD._load_sidecar(path)
         supported = getattr(sidecar, "SUPPORTED_BACKENDS", None)
-        if supported not in (("ch",), ("qemu",)):
+        if supported is None or not hasattr(sidecar, "run"):
             continue
-        backend_name = supported[0]
-        other_backend = "qemu" if backend_name == "ch" else "ch"
-        banner_text = "[vv]" if backend_name == "ch" else "vv-scsi-armed"
-        banner_error = ("guest harness banner not seen" if backend_name == "ch"
-                        else "guest did not arm the event queue")
-        checked.append(path)
+        for backend_name in supported:
+            cases.append((path, sidecar, supported, backend_name))
+    for path, sidecar, supported, backend_name in cases:
+        other_backend = "unsupported"
+        scsi = os.path.basename(path).startswith("scsi")
+        banner_text = "vv-scsi-armed" if scsi else "[vv]"
+        banner_error = ("guest did not arm the event queue" if scsi
+                        else "guest harness banner not seen")
         name = os.path.basename(path).split("_", 1)[0].upper()
         with patch.object(RUN_MOD, "_find_sidecar", return_value=path), \
              patch.object(RUN_MOD.tempfile, "mktemp") as create_disk, \
@@ -2270,7 +2272,7 @@ def test_unit_sidecar_outcomes():
 
         for backend, api, banner, error_type, reason in (
                 (other_backend, "api", True, RUN_MOD._SidecarSkip,
-                 f"backend is not {backend_name.upper()}"),
+                 "backend is not"),
                 (backend_name, None, True, RUN_MOD._SidecarSkip,
                  "api socket disabled"),
                 (backend_name, "api", False, RuntimeError, banner_error)):
@@ -2281,7 +2283,7 @@ def test_unit_sidecar_outcomes():
             try:
                 sidecar.run(ctx)
             except error_type as error:
-                assert str(error) == reason, (path, str(error))
+                assert reason in str(error), (path, str(error))
             else:
                 raise AssertionError(f"{path} ignored {reason}")
             ctx.vm_api.assert_not_called()
@@ -2291,22 +2293,59 @@ def test_unit_sidecar_outcomes():
             with open(disk, "wb") as image:
                 image.truncate(16 * 1024 * 1024)
             success = (subprocess.CompletedProcess([], 0, "", "")
-                       if backend_name == "ch" else {"return": {}})
+                       if backend_name in ("ch", "openvmm")
+                       else {"return": {"actual": 512 * 1024 * 1024,
+                                        "status": "completed"}})
             ctx = SimpleNamespace(
                 backend=SimpleNamespace(name=backend_name), api_sock="api",
-                tmpdir=tmpdir, disk=disk, skip=skip,
+                tmpdir=tmpdir, disk=disk, skip=skip, vmm_pid=1000,
                 wait_text=Mock(return_value=True), log=Mock(),
                 vm_api=Mock(return_value=success))
+
+            def successful_response(command, *args, **kwargs):
+                return {"return": []} if command == "qom-list" else success
+
+            ctx.vm_api.side_effect = successful_response
+            if backend_name in ("qemu", "qemu-mmio"):
+                os.mkdir(os.path.join(tmpdir, "snap"))
+                with open(os.path.join(tmpdir, "snap", "vmstate"), "wb") as state:
+                    state.write(b"VM state")
             sidecar.run(ctx)
             commands = ctx.vm_api.call_args_list
             assert commands, f"{path} performed no host actions"
-            ctx.wait_text.assert_called_once_with(banner_text, timeout=20.0)
+            for command in commands:
+                if command.args[0] == "balloon":
+                    assert command.args[1] == {
+                        "value": success["return"]["actual"] - 64 * 1024 * 1024
+                    }, (path, command)
+                if command.args[0] == "block_resize":
+                    assert command.args[1] == {
+                        "device": "scsidisk" if scsi else "vd0",
+                        "size": 32 * 1024 * 1024
+                    }, (path, command)
+            waits = ctx.wait_text.call_args_list
+            assert waits[0].args == (banner_text,), (path, waits)
+            assert all(wait.kwargs == {"timeout": 20.0}
+                       for wait in waits), (path, waits)
             assert ctx.log.called, f"{path} did not report completion"
             completion = ctx.log.call_args.args[0]
 
+            for index in range(1, len(waits)):
+                ctx.vm_api.reset_mock()
+                ctx.wait_text.side_effect = [True] * index + [False]
+                try:
+                    sidecar.run(ctx)
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError(
+                        f"{path} ignored missing {waits[index].args[0]}")
+                assert len(ctx.vm_api.call_args_list) < len(commands), path
+            ctx.wait_text.side_effect = None
+
             for index, command in enumerate(commands):
                 responses = ([subprocess.CompletedProcess([], 1, "out", "err")]
-                             if backend_name == "ch" else [
+                             if backend_name in ("ch", "openvmm") else [
                                  {"error": {"class": "GenericError",
                                             "desc": "command failed"}},
                                  b"invalid reply", {}, None])
@@ -2316,8 +2355,10 @@ def test_unit_sidecar_outcomes():
                     ctx.log.reset_mock()
                     ctx.vm_api.reset_mock()
                     ctx.vm_api.side_effect = (
-                        [success] * index + [failure] +
-                        [success] * len(commands))
+                        [successful_response(entry.args[0])
+                         for entry in commands[:index]] + [failure] +
+                        [successful_response(entry.args[0])
+                         for entry in commands[index + 1:]] + [success])
                     try:
                         sidecar.run(ctx)
                     except (RuntimeError, subprocess.TimeoutExpired) as error:
@@ -2329,7 +2370,7 @@ def test_unit_sidecar_outcomes():
                             diagnostics = str(error) + " ".join(
                                 entry.args[0]
                                 for entry in ctx.log.call_args_list)
-                            if backend_name == "ch":
+                            if backend_name in ("ch", "openvmm"):
                                 assert "rc=1" in diagnostics, (path, diagnostics)
                                 assert "err" in diagnostics, (path, diagnostics)
                             else:
@@ -2342,7 +2383,7 @@ def test_unit_sidecar_outcomes():
                         commands[:index + 1]), path
                     assert completion not in [
                         entry.args[0] for entry in ctx.log.call_args_list], path
-    assert checked, "no sidecars were checked"
+    assert cases, "no sidecars were checked"
 
 
 def test_unit_sidecar_runtime_skip_preserves_failures():

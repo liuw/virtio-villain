@@ -3,6 +3,8 @@
 
 import os
 
+from host_helpers import qmp
+
 
 def wait_armed(ctx):
     if ctx.backend.name != "qemu":
@@ -11,15 +13,6 @@ def wait_armed(ctx):
         ctx.skip("api socket disabled")
     if not ctx.wait_text("vv-scsi-armed", timeout=20.0):
         raise RuntimeError("guest did not arm the event queue")
-
-
-def qmp(ctx, command, arguments):
-    response = ctx.vm_api(command, arguments)
-    ctx.log(f"{command}: {response}")
-    if (not isinstance(response, dict) or "error" in response
-            or "return" not in response):
-        raise RuntimeError(f"QMP {command} failed: {response!r}")
-    return response
 
 
 def hot_add(ctx):
