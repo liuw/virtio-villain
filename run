@@ -1349,7 +1349,7 @@ class _Ctx:
     """Context object passed to a sidecar's run() function."""
 
     def __init__(self, *, test_id, backend, vmm_pid, tmpdir, api_sock,
-                 disk, log, output_buf, output_lock, stop_event):
+                 disk, log, output_buf, output_lock, stop_event, control=None):
         self.test_id = test_id
         self.backend = backend
         self.vmm_pid = vmm_pid
@@ -1360,6 +1360,7 @@ class _Ctx:
         self.stop = stop_event
         self._buf = output_buf
         self._lock = output_lock
+        self._control = control
 
     def skip(self, reason):
         """Stop the host actor because a required prerequisite is absent."""
@@ -1375,6 +1376,8 @@ class _Ctx:
             raise RuntimeError("api socket disabled for this test")
         if not self.vm_alive():
             raise RuntimeError(f"VMM exited before API command {command}")
+        if self._control is not None:
+            return self._control(command, args, timeout)
         return vm_api(self.api_sock, self.backend, command, args,
                       timeout=timeout)
 
@@ -1595,6 +1598,7 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
     opts["scsi_path2"] = scsi_path2
 
     api_socket = None
+    openvmm_control = bool(opts.get("api_enabled") and backend.name == "openvmm")
     if opts.get("api_enabled") and backend.name in ("ch", "qemu"):
         api_socket = disk_path.rsplit(".", 1)[0] + ".api"
         opts["api_socket"] = api_socket
@@ -1756,13 +1760,56 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
                 backend=backend,
                 vmm_pid=proc.pid,
                 tmpdir=sidecar_tmpdir,
-                api_sock=opts.get("api_socket"),
+                api_sock="repl" if openvmm_control else opts.get("api_socket"),
                 disk=disk_path,
                 log=_sc_log,
                 output_buf=chunks,
                 output_lock=output_lock,
                 stop_event=sidecar_stop,
             )
+            if openvmm_control:
+                command_mode = False
+
+                def _openvmm_command(command, arguments, timeout):
+                    nonlocal command_mode
+                    acknowledgements = {
+                        "pause": b"pause complete",
+                        "resume": b"resumed complete",
+                        "pulse-save-restore": b"pulse save/restore complete",
+                    }
+                    if command not in acknowledgements or arguments:
+                        raise ValueError(f"unsupported OpenVMM command: {command}")
+                    deadline = time.monotonic() + (
+                        _VM_API_TIMEOUT if timeout is None else timeout)
+                    if not command_mode:
+                        os.write(openvmm_master, b"\x11")
+                        while b"openvmm> " not in (
+                                b"".join(chunks) + b"".join(err_chunks)):
+                            if proc.poll() is not None:
+                                raise RuntimeError(
+                                    "OpenVMM exited before command prompt")
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError("OpenVMM command prompt timed out")
+                            time.sleep(0.01)
+                        command_mode = True
+                    start = len(err_chunks)
+                    os.write(openvmm_master, command.encode() + b"\n")
+                    while True:
+                        reply = b"".join(err_chunks[start:])
+                        if acknowledgements[command] in reply:
+                            return subprocess.CompletedProcess(
+                                [command], 0, "", reply.decode(errors="replace"))
+                        if b"ERROR" in reply or b"error:" in reply:
+                            raise RuntimeError(
+                                f"OpenVMM {command} failed: "
+                                f"{reply.decode(errors='replace')}")
+                        if proc.poll() is not None:
+                            raise RuntimeError(f"OpenVMM exited during {command}")
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError(f"OpenVMM {command} timed out")
+                        time.sleep(0.01)
+
+                ctx._control = _openvmm_command
 
             def _sc_run():
                 try:

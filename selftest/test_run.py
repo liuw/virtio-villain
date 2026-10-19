@@ -2513,6 +2513,73 @@ def _sidecar_api_context():
         output_lock=threading.Lock(), stop_event=threading.Event())
 
 
+def test_unit_openvmm_console_commands():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    class Backend:
+        name = "openvmm"
+        console_device = "ttyS0"
+        mmio_transport = False
+
+        def __init__(self, mode):
+            self.mode = mode
+
+        def build_cmd(self, *args):
+            script = (
+                "import os, sys, time, tty\n"
+                "tty.setraw(0)\n"
+                "print('[vv] guest ready', flush=True)\n"
+                "while os.read(0, 1) != b'\\x11': pass\n"
+                f"mode = {self.mode!r}\n"
+                "if mode == 'prompt-exit': sys.exit(0)\n"
+                "if mode == 'prompt-timeout':\n"
+                "    time.sleep(0.4)\n"
+                "    print('[PASS] T0001', flush=True)\n"
+                "    time.sleep(1)\n"
+                "    sys.exit(0)\n"
+                "print('openvmm> ', flush=True)\n"
+                "for command in ('pause', 'resume'):\n"
+                "    assert sys.stdin.readline().strip() == command\n"
+                "    if mode == 'error':\n"
+                "        print('ERROR command failed', file=sys.stderr, flush=True)\n"
+                "        break\n"
+                "    if mode == 'timeout':\n"
+                "        time.sleep(0.4)\n"
+                "        break\n"
+                "    reply = 'pause complete' if command == 'pause' else 'resumed complete'\n"
+                "    print(reply, file=sys.stderr, flush=True)\n"
+                "print('[PASS] T0001', flush=True)\n"
+                "time.sleep(1)\n"
+            )
+            return [sys.executable, "-u", "-c", script]
+
+    def action(ctx):
+        assert ctx.wait_text("[vv]", timeout=2)
+        for command in ("pause", "resume"):
+            response = ctx.vm_api(command, timeout=0.2)
+            assert response.returncode == 0
+
+    for mode, expected in (("success", "PASS"), ("error", "FAIL"),
+                           ("timeout", "FAIL"), ("prompt-exit", "WEDGED"),
+                           ("prompt-timeout", "FAIL")):
+        with patch.object(RUN_MOD, "_find_sidecar", return_value="actor"), \
+             patch.object(RUN_MOD, "_load_sidecar",
+                          return_value=SimpleNamespace(run=action)):
+            [(name, status, output)] = RUN_MOD.run_test(
+                Backend(mode), "kernel", "T0001", 3,
+                opts={"api_enabled": True})
+        assert status == expected, (mode, name, status, output)
+        if mode == "error":
+            assert "OpenVMM pause failed" in output
+        if mode == "timeout":
+            assert "OpenVMM pause timed out" in output
+        if mode == "prompt-exit":
+            assert "OpenVMM exited before command prompt" in output
+        if mode == "prompt-timeout":
+            assert "OpenVMM command prompt timed out" in output
+
+
 def test_unit_sidecar_api_rejects_exited_vmm():
     from unittest.mock import patch
 
