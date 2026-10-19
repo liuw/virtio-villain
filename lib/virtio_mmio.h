@@ -109,6 +109,7 @@ int virtio_mmio_find(struct virtio_mmio_dev *dev);
  * Returns 0 on success.
  */
 int virtio_mmio_init(struct virtio_mmio_dev *dev);
+int virtio_mmio_init_features(struct virtio_mmio_dev *dev, uint64_t wanted);
 
 /* Reset MMIO device (write 0 to Status register). */
 void virtio_mmio_reset(struct virtio_mmio_dev *dev);

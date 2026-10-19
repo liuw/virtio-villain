@@ -203,7 +203,7 @@ int virtio_mmio_find(struct virtio_mmio_dev *dev)
     return 0;
 }
 
-int virtio_mmio_init(struct virtio_mmio_dev *dev)
+int virtio_mmio_init_features(struct virtio_mmio_dev *dev, uint64_t wanted)
 {
     /* Reset */
     mmio_write32(dev, VIRTIO_MMIO_STATUS, 0);
@@ -219,11 +219,19 @@ int virtio_mmio_init(struct virtio_mmio_dev *dev)
                  status | VIRTIO_MMIO_STATUS_DRIVER);
     __sync_synchronize();
 
-    /* Negotiate zero features */
+    /* Modern transports require VERSION_1. */
+    if (mmio_read32(dev, VIRTIO_MMIO_VERSION) >= 2)
+        wanted |= 1ULL << 32;
+    mmio_write32(dev, VIRTIO_MMIO_DEVICE_FEATURES_SEL, 0);
+    uint64_t offered = mmio_read32(dev, VIRTIO_MMIO_DEVICE_FEATURES);
+    mmio_write32(dev, VIRTIO_MMIO_DEVICE_FEATURES_SEL, 1);
+    offered |= (uint64_t)mmio_read32(dev, VIRTIO_MMIO_DEVICE_FEATURES) << 32;
+    if ((offered & wanted) != wanted)
+        return -1;
     mmio_write32(dev, VIRTIO_MMIO_DRIVER_FEATURES_SEL, 0);
-    mmio_write32(dev, VIRTIO_MMIO_DRIVER_FEATURES, 0);
+    mmio_write32(dev, VIRTIO_MMIO_DRIVER_FEATURES, wanted);
     mmio_write32(dev, VIRTIO_MMIO_DRIVER_FEATURES_SEL, 1);
-    mmio_write32(dev, VIRTIO_MMIO_DRIVER_FEATURES, 0);
+    mmio_write32(dev, VIRTIO_MMIO_DRIVER_FEATURES, wanted >> 32);
 
     status = mmio_read32(dev, VIRTIO_MMIO_STATUS);
     mmio_write32(dev, VIRTIO_MMIO_STATUS,
@@ -235,6 +243,11 @@ int virtio_mmio_init(struct virtio_mmio_dev *dev)
         return -1;
 
     return 0;
+}
+
+int virtio_mmio_init(struct virtio_mmio_dev *dev)
+{
+    return virtio_mmio_init_features(dev, 0);
 }
 
 void virtio_mmio_reset(struct virtio_mmio_dev *dev)
