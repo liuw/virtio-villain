@@ -9,11 +9,8 @@
  * for a freshly hot added function to appear, attaches the
  * transport, issues the reset, polls device_status until it reads
  * zero or the timeout elapses, then asserts FEATURES_OK is clear
- * and queue_enable on queue 0 reads zero.
- *
- * If no new function appears within the polling window the
- * sidecar did not run or the backend does not support these
- * verbs, and the guest reports SKIP.
+ * and queue_enable on queue 0 reads zero. Guest markers coordinate
+ * discovery and removal so the final check runs only after readd.
  */
 #include "tests/test.h"
 #include "lib/util.h"
@@ -101,7 +98,32 @@ static test_result_t test_blk_hotplug_remove_readd(struct virtio_dev *dev,
         new_slot[0] = 0;
     }
     if (new_slot[0] == 0)
-        return TEST_SKIP;
+        TFAIL("first hot added disk did not appear");
+
+    printf("vv-blk-added\n");
+    fflush(stdout);
+    waited = 0;
+    while (waited < total && access(new_slot, F_OK) == 0) {
+        usleep(step * 1000);
+        waited += step;
+    }
+    if (access(new_slot, F_OK) == 0)
+        TFAIL("hot added disk was not removed");
+
+    printf("vv-blk-removed\n");
+    fflush(stdout);
+    new_slot[0] = 0;
+    waited = 0;
+    while (waited < total) {
+        if (trigger_pci_rescan() == 0
+            && find_other_blk(skip, new_slot, sizeof(new_slot)) == 0)
+            break;
+        usleep(step * 1000);
+        waited += step;
+        new_slot[0] = 0;
+    }
+    if (new_slot[0] == 0)
+        TFAIL("hot disk did not reappear");
 
     struct virtio_dev hp = {0};
     snprintf(hp.slot, sizeof(hp.slot), "%s", new_slot);
