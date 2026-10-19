@@ -5,17 +5,16 @@ Backs it with a fresh sparse file in ctx.tmpdir.
 """
 import os
 
+SUPPORTED_BACKENDS = ("ch",)
+
 
 def run(ctx):
     if ctx.backend.name != "ch":
-        ctx.log("backend is not CH, skipping")
-        return
+        ctx.skip("backend is not CH")
     if ctx.api_sock is None:
-        ctx.log("api socket disabled, skipping")
-        return
+        ctx.skip("api socket disabled")
     if not ctx.wait_text("[vv]", timeout=20.0):
-        ctx.log("guest harness banner not seen")
-        return
+        raise RuntimeError("guest harness banner not seen")
 
     pmem_file = os.path.join(ctx.tmpdir, "hp_pmem.raw")
     size = 16 * 1024 * 1024
@@ -26,5 +25,5 @@ def run(ctx):
     if cp.returncode != 0:
         ctx.log(f"add-pmem failed rc={cp.returncode} "
                 f"stdout={cp.stdout!r} stderr={cp.stderr!r}")
-        return
+        raise RuntimeError("ch-remote add-pmem failed")
     ctx.log("add-pmem completed")
