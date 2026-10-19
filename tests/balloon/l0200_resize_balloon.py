@@ -4,17 +4,16 @@ L0200 sidecar. Resizes the balloon target on the host. The guest
 watches num_pages and config_generation for the change.
 """
 
+SUPPORTED_BACKENDS = ("ch",)
+
 
 def run(ctx):
     if ctx.backend.name != "ch":
-        ctx.log("backend is not CH, skipping")
-        return
+        ctx.skip("backend is not CH")
     if ctx.api_sock is None:
-        ctx.log("api socket disabled, skipping")
-        return
+        ctx.skip("api socket disabled")
     if not ctx.wait_text("[vv]", timeout=20.0):
-        ctx.log("guest harness banner not seen")
-        return
+        raise RuntimeError("guest harness banner not seen")
 
     cp = ctx.vm_api("resize", ["--balloon", "64M"])
     if cp.returncode != 0:
