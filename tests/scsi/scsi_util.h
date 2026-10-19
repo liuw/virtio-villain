@@ -15,6 +15,20 @@
 #include <string.h>
 #include <unistd.h>
 
+/* Reset before replacing queues that the harness already enabled. */
+static inline void scsi_attach_request_queue(struct virtio_dev *dev,
+                                              struct vring *control,
+                                              struct vring *request,
+                                              uint16_t queue)
+{
+    if (virtio_pci_init(dev) < 0)
+        vv_die("SCSI device reset failed");
+    vring_attach(dev, control, 0);
+    vring_attach(dev, request, queue);
+    dev->common->device_status |= VIRTIO_STATUS_DRIVER_OK;
+    __sync_synchronize();
+}
+
 /* Fill an 8-byte virtio-scsi LUN for the given target and logical unit. */
 static inline void scsi_set_lun(uint8_t *lun, uint8_t target, uint16_t l)
 {

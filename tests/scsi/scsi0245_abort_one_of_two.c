@@ -19,7 +19,7 @@ static test_result_t test_scsi_abort_one_of_two(struct virtio_dev *dev,
     struct vring rq;
     if (vring_alloc(&rq, 16) < 0)
         return TEST_SKIP;
-    vring_attach(dev, &rq, 2);
+    scsi_attach_request_queue(dev, vr, &rq, 2);
 
     printf("vv-scsi-armed\n");
     fflush(stdout);
