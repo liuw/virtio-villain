@@ -1,24 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 """
 B0200 sidecar. Hot adds a virtio-blk function on the host side
-while the guest waits for a new PCI device. CH only. On QEMU and
-when the API socket is disabled the sidecar exits cleanly so the
-guest reports SKIP rather than FAIL.
+while the guest waits for a new PCI device. CH only.
 """
 import os
+
+SUPPORTED_BACKENDS = ("ch",)
 
 
 def run(ctx):
     if ctx.backend.name != "ch":
-        ctx.log("backend is not CH, skipping host side hot add")
-        return
+        ctx.skip("backend is not CH")
     if ctx.api_sock is None:
-        ctx.log("api socket disabled, skipping host side hot add")
-        return
+        ctx.skip("api socket disabled")
 
     if not ctx.wait_text("[vv]", timeout=20.0):
-        ctx.log("guest harness banner not seen, aborting")
-        return
+        raise RuntimeError("guest harness banner not seen")
 
     hp_disk = os.path.join(ctx.tmpdir, "hp.raw")
     with open(hp_disk, "wb") as f:
