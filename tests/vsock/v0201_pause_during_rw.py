@@ -4,7 +4,7 @@ V0201 sidecar. Pauses then resumes the running VM.
 """
 from host_helpers import pause_resume
 
-SUPPORTED_BACKENDS = ("ch", "qemu")
+SUPPORTED_BACKENDS = ("ch", "qemu", "openvmm")
 run = pause_resume
 
 
