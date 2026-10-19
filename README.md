@@ -195,10 +195,9 @@ in. The test to run is selected via kernel command line:
   not expected to crash)
 - `vv.test=list` - print all available test IDs and exit
 
-Since a successful test may crash the VMM, `run` spawns a fresh VM
-per test and collects results across invocations. For MMIO transport
-tests (M prefix), use `--mmio` with a QEMU binary to run against the
-microvm machine type.
+Since a successful test may crash the VMM, `run` spawns a fresh VM per test and collects results across invocations.
+
+Tests with an M prefix automatically use the QEMU MMIO backend. Use `--transport mmio` with a QEMU binary to run other tests that support MMIO.
 
 List available tests on the host (output adapts to terminal width,
 truncating long descriptions with `~`):

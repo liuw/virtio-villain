@@ -1352,6 +1352,28 @@ def test_unit_qemu_microvm_build_cmd_uses_mmio_device():
     assert not any("virtio-blk-pci" in str(a) for a in cmd)
 
 
+def test_unit_fetch_kernel_selects_mmio_image():
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory() as directory, \
+         patch.object(RUN_MOD, "_SCRIPT_DIR", directory), \
+         patch.object(RUN_MOD.platform, "machine", return_value="x86_64"):
+        os.mkdir(os.path.join(directory, "target"))
+        for name in ("bzImage-x86_64", "vmlinux-x86_64"):
+            with open(os.path.join(directory, "target", name), "wb") as image:
+                image.write(b"kernel")
+        with patch.object(RUN_MOD.urllib.request, "urlretrieve") as retrieve:
+            assert RUN_MOD.fetch_kernel(mmio=True).endswith("/bzImage-x86_64")
+            assert RUN_MOD.fetch_kernel().endswith("/vmlinux-x86_64")
+        retrieve.assert_not_called()
+
+
+def test_transport_rejects_non_qemu():
+    result = run_runner("--transport", "mmio", "PASS")
+    assert result.returncode != 0
+    assert "--transport is only supported for QEMU" in result.stderr
+
+
 # ---------------------------------------------------------------------------
 # End to end coverage of result tags via mock VMM.
 

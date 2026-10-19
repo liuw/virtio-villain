@@ -727,10 +727,11 @@ class QemuMicrovm(VmmBackend):
             machine_args = ["-M", "virt", "-cpu", "host"]
             self.console_device = "ttyAMA0"
         else:
-            machine_args = ["-M", "microvm,x-option-roms=off,rtc=off"]
+            machine_args = ["-M", "microvm,rtc=off"]
         cmd = [
             self.binary,
             *machine_args,
+            "-global", "virtio-mmio.force-legacy=false",
             "-enable-kvm",
             "-kernel", kernel,
             "-initrd", initramfs,
@@ -905,10 +906,12 @@ def detect_vmm(vmm_path):
              f"Supported: {names}")
 
 
-def fetch_kernel():
+def fetch_kernel(mmio=False):
     """Download the CH guest kernel if not already cached."""
     arch = platform.machine()
     name = KERNEL_NAMES.get(arch)
+    if mmio and arch == "x86_64":
+        name = "bzImage-x86_64"
     if not name:
         sys.exit(f"No pre-built kernel available for {arch}. Use --kernel.")
     cache_path = os.path.join(_SCRIPT_DIR, "target", name)
@@ -2614,6 +2617,8 @@ def main():
                        help="Path to the VMM binary (required)")
     g_vmm.add_argument("-k", "--kernel", default=None, metavar="PATH",
                        help="Guest kernel, fetched automatically if omitted")
+    g_vmm.add_argument("--transport", choices=("pci", "mmio"), default=None,
+                       help="Select the QEMU virtio transport")
     g_vmm.add_argument("--init", default=None, metavar="PATH",
                        help="Host executable for test discovery "
                             "(default: target/init)")
@@ -2740,8 +2745,13 @@ def main():
             args.exclude_dir = []
         args.exclude_dir.append("packed")
 
-    kernel = args.kernel or fetch_kernel()
     backend = detect_vmm(args.vmm)
+    if args.transport is not None:
+        if not isinstance(backend, Qemu):
+            sys.exit("--transport is only supported for QEMU")
+        if args.transport == "mmio":
+            backend = QemuMicrovm(args.vmm)
+    kernel = args.kernel or fetch_kernel(mmio=backend.name == "qemu-mmio")
 
     vmm_trace = []
     for spec in args.vmm_trace:
@@ -2847,6 +2857,9 @@ def main():
         sys.exit("No tests found.")
 
     mmio_tests = [t for t in tests if t.startswith("M")]
+    mmio_kernel = kernel
+    if mmio_tests and mmio_backend and not args.kernel:
+        mmio_kernel = fetch_kernel(mmio=True)
     if mmio_tests and not mmio_backend and not backend.mmio_transport:
         print(f"Note: {len(mmio_tests)} MMIO test(s) skipped "
               f"(no MMIO transport available)", file=human)
@@ -2858,7 +2871,7 @@ def main():
         with open(probe_disk, "wb") as f:
             f.truncate(DISK_SIZE)
         probe_cmd = mmio_backend.build_cmd(
-            kernel, args.initramfs, probe_disk,
+            mmio_kernel, args.initramfs, probe_disk,
             f"console={mmio_backend.console_device} vv.test=list")
         probe_ok = False
         try:
@@ -2867,12 +2880,14 @@ def main():
                 capture_output=True, timeout=2,
                 start_new_session=True)
             probe_ok = b"[vv]" in result.stdout
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+        except subprocess.TimeoutExpired as error:
+            probe_ok = b"[vv]" in (error.stdout or b"")
+        except OSError as error:
+            print(f"Note: MMIO boot probe failed: {error}", file=human)
         finally:
             os.unlink(probe_disk)
         if not probe_ok:
-            print(f"Note: kernel lacks virtio-mmio support; "
+            print(f"Note: MMIO guest boot probe failed; "
                   f"skipping {len(mmio_tests)} MMIO test(s)", file=human)
             mmio_backend = None
             tests = [t for t in tests if not t.startswith("M")]
@@ -2971,7 +2986,7 @@ def main():
     def _backend_for(test_name):
         """Return (backend, kernel) for a given test."""
         if test_name.startswith("M") and mmio_backend:
-            return mmio_backend, kernel
+            return mmio_backend, mmio_kernel
         return backend, kernel
 
     saved_term = _save_term()
