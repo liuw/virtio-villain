@@ -2105,7 +2105,7 @@ def test_unit_sidecar_exception_overrides_guest_verdict():
         def build_cmd(self, kernel, initramfs, disk_path, cmdline, opts=None):
             return ["sh", "-c",
                     f"sleep 0.1; printf '[{self.verdict}] T0001"
-                    f"{self.detail}\\n'"]
+                    f"'; sleep 0.05; printf '{self.detail}\\n'"]
 
     def fail_action(ctx):
         raise RuntimeError("required host action failed")
@@ -2126,6 +2126,7 @@ def test_unit_sidecar_exception_overrides_guest_verdict():
                 5, 0, False, "raw", {})
         _, status, output = results[0]
         assert status == expected, (verdict, detail, status, output)
+        assert f"[{verdict}] T0001{detail}\n" in output, output
         if expected == "SKIP":
             assert "[vv-sidecar] SKIP: guest device unavailable" in output
             assert "required host action failed" in output
