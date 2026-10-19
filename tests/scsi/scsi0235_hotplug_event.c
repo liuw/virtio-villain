@@ -17,7 +17,7 @@
 static test_result_t test_scsi_hotplug_event(struct virtio_dev *dev,
                                              struct vring *vr)
 {
-    if (!virtio_pci_feature_offered(dev, VIRTIO_SCSI_F_HOTPLUG))
+    if (!scsi_feature_offered(dev, VIRTIO_SCSI_F_HOTPLUG))
         TSKIP("hot plug feature not offered");
 
     struct virtio_scsi_event *ev = vv_alloc_pages(1);
@@ -28,7 +28,7 @@ static test_result_t test_scsi_hotplug_event(struct virtio_dev *dev,
                        VRING_DESC_F_WRITE, 0);
     vring_raw_set_avail(vr, 0, 0);
     vring_raw_set_avail_idx(vr, 1);
-    virtio_pci_kick(dev, vr->queue);
+    scsi_kick(dev, vr->queue);
 
     /* Tell the sidecar the event queue is armed so it can hot add. */
     printf("vv-scsi-armed\n");
@@ -60,3 +60,6 @@ REGISTER_TEST_Q_REQUIRES(SCSI0235, VIRTIO_PCI_DEVICE_SCSI,
                          "Hot adding a logical unit delivers a reset event",
                          VIRTIO_SPEC_V1_4, "5.6.6.3", 1,
                          VV_FEATURE_BIT(VIRTIO_SCSI_F_HOTPLUG), 0);
+
+REGISTER_SCSI_MMIO(SCSI0235, test_scsi_hotplug_event, 1,
+                   1ULL << VIRTIO_SCSI_F_HOTPLUG);

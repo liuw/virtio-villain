@@ -11,10 +11,70 @@
 #include "lib/vring.h"
 #include "lib/virtio_pci.h"
 #include "lib/virtio_spec.h"
+#include "tests/mmio/mmio_helpers.h"
 
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+static inline void scsi_kick(struct virtio_dev *dev, uint16_t queue)
+{
+    if (dev->mmio)
+        virtio_mmio_kick(dev->mmio, queue);
+    else
+        virtio_pci_kick(dev, queue);
+}
+
+static inline int scsi_feature_offered(struct virtio_dev *dev, unsigned bit)
+{
+    if (!dev->mmio)
+        return virtio_pci_feature_offered(dev, bit);
+    mmio_write32(dev->mmio, VIRTIO_MMIO_DEVICE_FEATURES_SEL, bit / 32);
+    return !!(mmio_read32(dev->mmio, VIRTIO_MMIO_DEVICE_FEATURES)
+              & (1U << (bit % 32)));
+}
+
+static inline test_result_t scsi_kick_and_wait(struct virtio_dev *dev,
+                                               struct vring *ring)
+{
+    if (!dev->mmio)
+        return vv_kick_and_wait(dev, ring, 0, VV_TIMEOUT_MS);
+    uint16_t before = ring->used->idx;
+    scsi_kick(dev, ring->queue);
+    for (int elapsed = 0; elapsed < VV_TIMEOUT_MS * vv_wait_scale; elapsed++) {
+        __sync_synchronize();
+        if (ring->used->idx != before)
+            return TEST_PASS;
+        usleep(1000);
+    }
+    TWEDGED("MMIO SCSI queue did not complete");
+}
+
+static inline test_result_t scsi_run_mmio(struct virtio_mmio_dev *mmio,
+                                         test_fn fn, uint16_t queue,
+                                         uint64_t features)
+{
+    struct virtio_dev dev = { .mmio = mmio };
+    struct vring ring;
+    if (virtio_mmio_init_features(mmio, features) < 0)
+        TFAIL("MMIO SCSI feature negotiation failed");
+    if (vring_alloc(&ring, 16) < 0)
+        TFAIL("MMIO SCSI queue allocation failed");
+    test_result_t result = mmio_bind_queue(mmio, &ring, queue);
+    if (result != TEST_PASS)
+        return result;
+    mmio_write32(mmio, VIRTIO_MMIO_STATUS,
+                 mmio_read32(mmio, VIRTIO_MMIO_STATUS)
+                 | VIRTIO_MMIO_STATUS_DRIVER_OK);
+    return fn(&dev, &ring);
+}
+
+#define REGISTER_SCSI_MMIO(tname, func, queue, features) \
+    static test_result_t mmio_##tname(struct virtio_mmio_dev *dev) \
+    { \
+        return scsi_run_mmio(dev, func, queue, features); \
+    } \
+    REGISTER_MMIO_VARIANT(tname, 8, mmio_##tname)
 
 /* Reset before replacing queues that the harness already enabled. */
 static inline void scsi_attach_request_queue(struct virtio_dev *dev,
@@ -22,6 +82,17 @@ static inline void scsi_attach_request_queue(struct virtio_dev *dev,
                                               struct vring *request,
                                               uint16_t queue)
 {
+    if (dev->mmio) {
+        if (virtio_mmio_init(dev->mmio) < 0)
+            vv_die("MMIO SCSI device reset failed");
+        if (mmio_bind_queue(dev->mmio, control, 0) != TEST_PASS
+            || mmio_bind_queue(dev->mmio, request, queue) != TEST_PASS)
+            vv_die("MMIO SCSI queue attach failed");
+        mmio_write32(dev->mmio, VIRTIO_MMIO_STATUS,
+                     mmio_read32(dev->mmio, VIRTIO_MMIO_STATUS)
+                     | VIRTIO_MMIO_STATUS_DRIVER_OK);
+        return;
+    }
     if (virtio_pci_init(dev) < 0)
         vv_die("SCSI device reset failed");
     vring_attach(dev, control, 0);
@@ -95,7 +166,7 @@ static inline test_result_t scsi_do_cmd(struct virtio_dev *dev,
 
     vring_raw_set_avail(vr, seq, 0);
     vring_raw_set_avail_idx(vr, seq + 1);
-    return vv_kick_and_wait(dev, vr, 0, VV_TIMEOUT_MS);
+    return scsi_kick_and_wait(dev, vr);
 }
 
 /*
@@ -132,7 +203,7 @@ static inline test_result_t scsi_do_tmf(struct virtio_dev *dev,
                        VRING_DESC_F_WRITE, 0);
     vring_raw_set_avail(vr, seq, 0);
     vring_raw_set_avail_idx(vr, seq + 1);
-    return vv_kick_and_wait(dev, vr, 0, VV_TIMEOUT_MS);
+    return scsi_kick_and_wait(dev, vr);
 }
 
 /* A kick on another queue does not guarantee that the request is pending. */
@@ -235,7 +306,7 @@ static inline uint16_t scsi_submit_async(struct virtio_dev *dev,
     vring_raw_set_avail_idx(vr, seq + 1);
     uint16_t before = vr->used->idx;
     __sync_synchronize();
-    virtio_pci_kick(dev, vr->queue);
+    scsi_kick(dev, vr->queue);
     return before;
 }
 
@@ -309,7 +380,7 @@ static inline test_result_t scsi_do_cmd_paged(struct virtio_dev *dev,
 
     vring_raw_set_avail(vr, seq, 0);
     vring_raw_set_avail_idx(vr, seq + 1);
-    return vv_kick_and_wait(dev, vr, 0, VV_TIMEOUT_MS);
+    return scsi_kick_and_wait(dev, vr);
 }
 
 #endif /* VV_SCSI_UTIL_H */

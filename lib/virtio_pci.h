@@ -89,6 +89,7 @@ struct virtio_pci_common_cfg {
  * Parsed virtio PCI device state.
  */
 struct virtio_dev {
+    struct virtio_mmio_dev *mmio;
     volatile void *bar;                        /* primary BAR mapping */
     volatile struct virtio_pci_common_cfg *common; /* common cfg struct */
     volatile uint16_t *notify_base;            /* notification area base */

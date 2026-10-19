@@ -18,7 +18,7 @@
 static test_result_t test_scsi_param_change(struct virtio_dev *dev,
                                             struct vring *vr)
 {
-    if (!virtio_pci_feature_offered(dev, VIRTIO_SCSI_F_CHANGE))
+    if (!scsi_feature_offered(dev, VIRTIO_SCSI_F_CHANGE))
         TSKIP("reported change feature not offered");
 
     struct virtio_scsi_event *ev[NBUF];
@@ -31,7 +31,7 @@ static test_result_t test_scsi_param_change(struct virtio_dev *dev,
         vring_raw_set_avail(vr, i, (uint16_t)i);
     }
     vring_raw_set_avail_idx(vr, NBUF);
-    virtio_pci_kick(dev, vr->queue);
+    scsi_kick(dev, vr->queue);
 
     printf("vv-scsi-armed\n");
     fflush(stdout);
@@ -62,3 +62,6 @@ REGISTER_TEST_Q_REQUIRES(SCSI0238, VIRTIO_PCI_DEVICE_SCSI,
                          "A disk resize delivers a parameter change event",
                          VIRTIO_SPEC_V1_4, "5.6.6.3", 1,
                          VV_FEATURE_BIT(VIRTIO_SCSI_F_CHANGE), 0);
+
+REGISTER_SCSI_MMIO(SCSI0238, test_scsi_param_change, 1,
+                   1ULL << VIRTIO_SCSI_F_CHANGE);

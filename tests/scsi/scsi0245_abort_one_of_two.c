@@ -73,7 +73,7 @@ static test_result_t test_scsi_abort_one_of_two(struct virtio_dev *dev,
     vring_raw_set_avail(&rq, rseq + 1, 3);
     vring_raw_set_avail_idx(&rq, rseq + 2);
     __sync_synchronize();
-    virtio_pci_kick(dev, rq.queue);
+    scsi_kick(dev, rq.queue);
     rseq += 2;
 
     struct virtio_scsi_ctrl_tmf_req *tmf = vv_alloc_pages(1);

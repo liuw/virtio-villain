@@ -84,6 +84,7 @@ static int parse_caps(const char *slot, struct virtio_caps *caps)
 
 int virtio_pci_attach(uint16_t device_id, struct virtio_dev *dev)
 {
+    dev->mmio = NULL;
     dev->device_id = device_id;
     pci_enable(dev->slot);
 

@@ -68,7 +68,7 @@ static test_result_t test_scsi_abort_inflight(struct virtio_dev *dev,
     vring_raw_set_avail_idx(&rq, rseq + 1);
     uint16_t rq_before = rq.used->idx;
     __sync_synchronize();
-    virtio_pci_kick(dev, rq.queue);
+    scsi_kick(dev, rq.queue);
     rseq++;
 
     /* Abort the queued read by tag on the control queue. */
