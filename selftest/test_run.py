@@ -272,6 +272,75 @@ def test_unit_probe_cache_hit_prepares_nothing():
             run_case.assert_not_called()
 
 
+def test_unit_mmio_probe_filters_each_launch_configuration():
+    import contextlib
+    import io
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    names = ["B0204", "SCSI0240", "SCSI0241"]
+    metadata = {
+        "B0204": {"device_id": 0x1042, "required_features": 0,
+                  "flags": 0, "min_queues": 1},
+        "SCSI0240": {"device_id": 0x1048, "required_features": 1,
+                     "flags": 0, "min_queues": 6},
+        "SCSI0241": {"device_id": 0x1048, "required_features": 8,
+                     "flags": 0, "min_queues": 6},
+    }
+    for failed in (False, True):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = SimpleNamespace(
+                name="qemu-mmio", binary=MOCK_LINK, mmio_transport=True,
+                console_device="ttyS0", build_cmd=Mock(
+                    side_effect=lambda k, i, d, c, o: [
+                        "probe-vmm", o.get("mmio_device", "blk")]))
+            modules = {
+                name: SimpleNamespace(
+                    SUPPORTED_BACKENDS=("qemu-mmio",),
+                    vmm_config=lambda device=(
+                        "scsi" if name.startswith("SCSI") else "blk"): {
+                            "opts": {"mmio_device": device}})
+                for name in names}
+            argv = [RUN, "--vmm", MOCK_LINK, "--kernel", "/dev/null",
+                    "--initramfs", RUN, "--skip-unsupported", "-j", "1", *names]
+
+            def launch(cmd, **kwargs):
+                assert "vv.transport=mmio" in (
+                    backend.build_cmd.call_args.args[3])
+                if cmd[1] == "scsi":
+                    output = b"probe failed\n" if failed else (
+                        b"PROBE\t1048\t1\t6\t1\t0\n")
+                else:
+                    output = b"PROBE\t1042\t0\t1\t1\t0\n"
+                return subprocess.CompletedProcess(cmd, 0, output, b"")
+
+            output = io.StringIO()
+            with patch.object(RUN_MOD, "_PROBE_CACHE_DIR", directory), \
+                 patch.object(RUN_MOD, "_SCRIPT_DIR", directory), \
+                 patch.object(RUN_MOD, "detect_vmm", return_value=backend), \
+                 patch.object(RUN_MOD, "print_banner"), \
+                 patch.object(RUN_MOD, "_install_termination_as_interrupt"), \
+                 patch.object(RUN_MOD, "get_test_list",
+                              return_value=(names, {}, metadata)), \
+                 patch.object(RUN_MOD, "_find_sidecar",
+                              side_effect=lambda name: name), \
+                 patch.object(RUN_MOD, "_load_sidecar",
+                              side_effect=lambda path: modules[path]), \
+                 patch.object(RUN_MOD.subprocess, "run", side_effect=launch), \
+                 patch.object(RUN_MOD, "run_test", side_effect=(
+                     lambda b, k, name, *args: [(name, "PASS", "")])) as run_case, \
+                 patch.object(sys, "argv", argv), \
+                 contextlib.redirect_stdout(output):
+                try:
+                    RUN_MOD.main()
+                except SystemExit as error:
+                    assert error.code == 0
+            assert backend.build_cmd.call_count == 2
+            assert [call.args[2] for call in run_case.call_args_list] == (
+                names if failed else names[:2])
+            assert ("capability probe unavailable" in output.getvalue()) == failed
+
+
 def test_artifact_paths():
     from unittest.mock import patch
 

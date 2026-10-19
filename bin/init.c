@@ -513,6 +513,30 @@ int main(int argc, char **argv)
     }
 
     if (strcmp(test_name, "probe") == 0) {
+        if (mmio_transport) {
+            struct virtio_mmio_dev dev;
+            if (virtio_mmio_find(&dev) < 0) {
+                printf("[vv] MMIO capability probe could not find a device\n");
+                shutdown(1);
+            }
+            uint64_t features = 0;
+            for (unsigned w = 0; w < 2; w++) {
+                mmio_write32(&dev, VIRTIO_MMIO_DEVICE_FEATURES_SEL, w);
+                features |= (uint64_t)mmio_read32(
+                    &dev, VIRTIO_MMIO_DEVICE_FEATURES) << (32 * w);
+            }
+            uint32_t nq;
+            for (nq = 0; nq <= UINT16_MAX; nq++) {
+                mmio_write32(&dev, VIRTIO_MMIO_QUEUE_SEL, nq);
+                if (!mmio_read32(&dev, VIRTIO_MMIO_QUEUE_NUM_MAX))
+                    break;
+            }
+            printf("PROBE\t0x%04x\t0x%016llx%016llx\t%u\t1\t0\n",
+                   0x1040 + dev.device_id,
+                   0ULL,
+                   (unsigned long long)features, nq);
+            shutdown(0);
+        }
         /* Probe all known device types and report feature bits. */
         static const uint16_t dev_ids[] = {
 #define X(name) VIRTIO_PCI_DEVICE_##name,
