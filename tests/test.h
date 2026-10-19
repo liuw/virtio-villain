@@ -85,6 +85,16 @@ typedef test_result_t (*test_packed_fn)(struct virtio_dev *dev,
                                        struct vring_packed *vr);
 typedef test_result_t (*test_mmio_fn)(struct virtio_mmio_dev *dev);
 
+struct mmio_test_variant {
+    const char *name;
+    test_mmio_fn fn;
+    uint32_t device_id;
+};
+
+#define REGISTER_MMIO_VARIANT(tname, dev_id, func) \
+    __attribute__((section("mmio_variants"), used, aligned(8))) \
+    static const struct mmio_test_variant _mmio_##tname = { #tname, func, dev_id }
+
 /* Test flags */
 #define TEST_FLAG_PACKED    1
 #define TEST_FLAG_MMIO      2

@@ -284,14 +284,36 @@ static int run_test_packed(struct test_entry *t)
 static int run_test_mmio(struct test_entry *t)
 {
     struct virtio_mmio_dev dev;
+    test_mmio_fn fn = (test_mmio_fn)t->fn;
+    uint32_t device_id = 0;
+    if (!(t->flags & TEST_FLAG_MMIO)) {
+        extern const struct mmio_test_variant __start_mmio_variants[];
+        extern const struct mmio_test_variant __stop_mmio_variants[];
+        fn = NULL;
+        for (const struct mmio_test_variant *v = __start_mmio_variants;
+             v < __stop_mmio_variants; v++) {
+            if (strcmp(t->name, v->name) == 0) {
+                fn = v->fn;
+                device_id = v->device_id;
+                break;
+            }
+        }
+        if (!fn) {
+            printf("[SKIP] %s (no MMIO implementation)\n", t->name);
+            return 0;
+        }
+    }
 
     if (virtio_mmio_find(&dev) < 0) {
         printf("[SKIP] %s (no MMIO device found)\n", t->name);
         return 0;
     }
+    if (device_id && dev.device_id != device_id) {
+        printf("[SKIP] %s (no MMIO device type %u)\n", t->name, device_id);
+        return 0;
+    }
 
     /* MMIO tests manage their own init - pass raw device */
-    test_mmio_fn fn = (test_mmio_fn)t->fn;
     test_result_t result = apply_xfail(t, fn(&dev));
     printf("[%s] %s\n", result_str(result), t->name);
 
@@ -458,6 +480,14 @@ int main(int argc, char **argv)
     printf("\n[vv] virtio-villain\n\n");
 
     const char *test_name = parse_cmdline_test();
+    int mmio_transport = 0;
+    FILE *cmdline_file = fopen("/proc/cmdline", "r");
+    if (cmdline_file) {
+        char cmdline[4096];
+        if (fgets(cmdline, sizeof(cmdline), cmdline_file))
+            mmio_transport = strstr(cmdline, "vv.transport=mmio") != NULL;
+        fclose(cmdline_file);
+    }
     parse_cmdline_wait_scale();
 
     if (!test_name || strcmp(test_name, "all") == 0) {
@@ -466,7 +496,7 @@ int main(int argc, char **argv)
         int n = test_count();
         for (int i = 0; i < n; i++) {
             struct test_entry *te = test_get(i);
-            if (te->flags & TEST_FLAG_MMIO)
+            if ((te->flags & TEST_FLAG_MMIO) || mmio_transport)
                 failures += run_test_mmio(te);
             else if (te->flags & TEST_FLAG_PACKED)
                 failures += run_test_packed(te);
@@ -530,7 +560,7 @@ int main(int argc, char **argv)
             continue;
         }
         int fail;
-        if (t->flags & TEST_FLAG_MMIO)
+        if ((t->flags & TEST_FLAG_MMIO) || mmio_transport)
             fail = run_test_mmio(t);
         else if (t->flags & TEST_FLAG_PACKED)
             fail = run_test_packed(t);

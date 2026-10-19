@@ -12,6 +12,7 @@
 #include "lib/util.h"
 #include "lib/vring.h"
 #include "lib/virtio_pci.h"
+#include "tests/mmio/mmio_helpers.h"
 
 #include <unistd.h>
 
@@ -42,3 +43,5 @@ REGISTER_TEST(A0200, VIRTIO_PCI_DEVICE_BLK,
               test_admin_survives_snapshot,
               "virtio admin queue host survives a snapshot",
               VIRTIO_SPEC_V1_3, "2.6");
+
+REGISTER_MMIO_VARIANT(A0200, 2, mmio_watch_status);
