@@ -4,20 +4,19 @@ L0200 sidecar. Resizes the balloon target on the host. The guest
 watches num_pages and config_generation for the change.
 """
 
-SUPPORTED_BACKENDS = ("ch",)
+from host_helpers import ch_command, qmp, wait_ready
+
+SUPPORTED_BACKENDS = ("ch", "qemu")
 
 
 def run(ctx):
-    if ctx.backend.name != "ch":
-        ctx.skip("backend is not CH")
-    if ctx.api_sock is None:
-        ctx.skip("api socket disabled")
-    if not ctx.wait_text("[vv]", timeout=20.0):
-        raise RuntimeError("guest harness banner not seen")
-
-    cp = ctx.vm_api("resize", ["--balloon", "64M"])
-    if cp.returncode != 0:
-        ctx.log(f"resize --balloon failed rc={cp.returncode} "
-                f"stdout={cp.stdout!r} stderr={cp.stderr!r}")
-        raise RuntimeError("ch-remote resize --balloon failed")
+    wait_ready(ctx)
+    if ctx.backend.name == "ch":
+        ch_command(ctx, "resize", ["--balloon", "64M"])
+    else:
+        reply = qmp(ctx, "query-balloon")
+        actual = reply["return"].get("actual")
+        if not isinstance(actual, int) or actual <= 64 * 1024 * 1024:
+            raise RuntimeError(f"QMP query-balloon invalid memory size: {reply!r}")
+        qmp(ctx, "balloon", {"value": actual - 64 * 1024 * 1024})
     ctx.log("balloon resized to 64M")
