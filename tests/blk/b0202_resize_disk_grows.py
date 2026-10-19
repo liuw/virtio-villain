@@ -5,20 +5,21 @@ The guest watches device_cfg.capacity and config_generation.
 """
 import os
 
-SUPPORTED_BACKENDS = ("ch",)
+from host_helpers import qmp, wait_ready
+
+SUPPORTED_BACKENDS = ("ch", "qemu")
 
 
 def run(ctx):
-    if ctx.backend.name != "ch":
-        ctx.skip("backend is not CH")
-    if ctx.api_sock is None:
-        ctx.skip("api socket disabled")
-    if not ctx.wait_text("[vv]", timeout=20.0):
-        raise RuntimeError("guest harness banner not seen")
+    wait_ready(ctx)
 
     cur = os.path.getsize(ctx.disk)
     new = cur + 16 * 1024 * 1024
     ctx.log(f"resizing disk from {cur} to {new} bytes")
+    if ctx.backend.name in ("qemu",):
+        qmp(ctx, "block_resize", {"device": "vd0", "size": new})
+        ctx.log("block_resize completed")
+        return
     cp = ctx.vm_api("resize-disk",
                     ["--disk", "_disk0", "--size", str(new)],
                     timeout=30.0)
