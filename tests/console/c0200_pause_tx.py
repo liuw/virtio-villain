@@ -4,17 +4,16 @@ C0200 sidecar. Pauses and resumes the VM around a console TX flush.
 """
 import time
 
+SUPPORTED_BACKENDS = ("ch",)
+
 
 def run(ctx):
     if ctx.backend.name != "ch":
-        ctx.log("backend is not CH, skipping")
-        return
+        ctx.skip("backend is not CH")
     if ctx.api_sock is None:
-        ctx.log("api socket disabled, skipping")
-        return
+        ctx.skip("api socket disabled")
     if not ctx.wait_text("[vv]", timeout=20.0):
-        ctx.log("guest harness banner not seen")
-        return
+        raise RuntimeError("guest harness banner not seen")
 
     cp = ctx.vm_api("pause")
     if cp.returncode != 0:
