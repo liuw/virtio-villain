@@ -113,3 +113,5 @@ static test_result_t test_scsi_abort_one_of_two(struct virtio_dev *dev,
 REGISTER_TEST_Q(SCSI0245, VIRTIO_PCI_DEVICE_SCSI, test_scsi_abort_one_of_two,
                 "ABORT TASK terminates only the matching queued read",
                 VIRTIO_SPEC_V1_4, "5.6.6.2", 0);
+
+REGISTER_SCSI_MMIO(SCSI0245, test_scsi_abort_one_of_two, 0, 0);

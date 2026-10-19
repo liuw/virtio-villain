@@ -70,3 +70,5 @@ static test_result_t test_scsi_abort_wrong_lun(struct virtio_dev *dev,
 REGISTER_TEST_Q(SCSI0252, VIRTIO_PCI_DEVICE_SCSI, test_scsi_abort_wrong_lun,
                 "ABORT TASK SET on another LUN leaves the read running",
                 VIRTIO_SPEC_V1_4, "5.6.6.2", 0);
+
+REGISTER_SCSI_MMIO(SCSI0252, test_scsi_abort_wrong_lun, 0, 0);

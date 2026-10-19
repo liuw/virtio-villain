@@ -69,3 +69,5 @@ static test_result_t test_scsi_clear_task_set(struct virtio_dev *dev,
 REGISTER_TEST_Q(SCSI0242, VIRTIO_PCI_DEVICE_SCSI, test_scsi_clear_task_set,
                 "CLEAR TASK SET terminates a throttled read",
                 VIRTIO_SPEC_V1_4, "5.6.6.2", 0);
+
+REGISTER_SCSI_MMIO(SCSI0242, test_scsi_clear_task_set, 0, 0);

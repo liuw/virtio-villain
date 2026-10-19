@@ -71,3 +71,5 @@ static test_result_t test_scsi_query_task_set(struct virtio_dev *dev,
 REGISTER_TEST_Q(SCSI0249, VIRTIO_PCI_DEVICE_SCSI, test_scsi_query_task_set,
                 "QUERY TASK SET reports a throttled read as pending",
                 VIRTIO_SPEC_V1_4, "5.6.6.2", 0);
+
+REGISTER_SCSI_MMIO(SCSI0249, test_scsi_query_task_set, 0, 0);

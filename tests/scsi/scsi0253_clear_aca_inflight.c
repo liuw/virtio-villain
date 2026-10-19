@@ -71,3 +71,5 @@ static test_result_t test_scsi_clear_aca(struct virtio_dev *dev,
 REGISTER_TEST_Q(SCSI0253, VIRTIO_PCI_DEVICE_SCSI, test_scsi_clear_aca,
                 "CLEAR ACA leaves a throttled read running",
                 VIRTIO_SPEC_V1_4, "5.6.6.2", 0);
+
+REGISTER_SCSI_MMIO(SCSI0253, test_scsi_clear_aca, 0, 0);

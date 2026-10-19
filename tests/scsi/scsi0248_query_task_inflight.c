@@ -70,3 +70,5 @@ static test_result_t test_scsi_query_task(struct virtio_dev *dev,
 REGISTER_TEST_Q(SCSI0248, VIRTIO_PCI_DEVICE_SCSI, test_scsi_query_task,
                 "QUERY TASK reports a throttled read as present",
                 VIRTIO_SPEC_V1_4, "5.6.6.2", 0);
+
+REGISTER_SCSI_MMIO(SCSI0248, test_scsi_query_task, 0, 0);

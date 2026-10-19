@@ -86,3 +86,5 @@ static test_result_t test_scsi_double_abort(struct virtio_dev *dev,
 REGISTER_TEST_Q(SCSI0255, VIRTIO_PCI_DEVICE_SCSI, test_scsi_double_abort,
                 "A second ABORT TASK for a gone tag reports function complete",
                 VIRTIO_SPEC_V1_4, "5.6.6.2", 0);
+
+REGISTER_SCSI_MMIO(SCSI0255, test_scsi_double_abort, 0, 0);

@@ -73,3 +73,5 @@ static test_result_t test_scsi_abort_reqq_four(struct virtio_dev *dev,
 REGISTER_TEST_Q(SCSI0251, VIRTIO_PCI_DEVICE_SCSI, test_scsi_abort_reqq_four,
                 "ABORT TASK reaches a read on the third request queue",
                 VIRTIO_SPEC_V1_4, "5.6.6.2", 0);
+
+REGISTER_SCSI_MMIO(SCSI0251, test_scsi_abort_reqq_four, 0, 0);

@@ -72,3 +72,5 @@ static test_result_t test_scsi_abort_multiblock(struct virtio_dev *dev,
 REGISTER_TEST_Q(SCSI0254, VIRTIO_PCI_DEVICE_SCSI, test_scsi_abort_multiblock,
                 "ABORT TASK terminates a throttled eight block read",
                 VIRTIO_SPEC_V1_4, "5.6.6.2", 0);
+
+REGISTER_SCSI_MMIO(SCSI0254, test_scsi_abort_multiblock, 0, 0);

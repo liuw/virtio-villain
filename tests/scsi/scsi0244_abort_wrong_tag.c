@@ -73,3 +73,5 @@ static test_result_t test_scsi_abort_wrong_tag(struct virtio_dev *dev,
 REGISTER_TEST_Q(SCSI0244, VIRTIO_PCI_DEVICE_SCSI, test_scsi_abort_wrong_tag,
                 "ABORT TASK of a different tag leaves the read running",
                 VIRTIO_SPEC_V1_4, "5.6.6.2", 0);
+
+REGISTER_SCSI_MMIO(SCSI0244, test_scsi_abort_wrong_tag, 0, 0);
