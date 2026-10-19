@@ -1911,6 +1911,96 @@ def test_unit_sidecar_supported_backend_runs():
         action.assert_called_once()
 
 
+def test_unit_ch_sidecar_outcomes():
+    import glob
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    def skip(reason):
+        raise RUN_MOD._SidecarSkip(reason)
+
+    checked = []
+    for path in sorted(glob.glob(
+            os.path.join(ROOT_DIR, "tests", "*", "*.py"))):
+        sidecar = RUN_MOD._load_sidecar(path)
+        if getattr(sidecar, "SUPPORTED_BACKENDS", None) != ("ch",):
+            continue
+        checked.append(path)
+        name = os.path.basename(path).split("_", 1)[0].upper()
+        with patch.object(RUN_MOD, "_find_sidecar", return_value=path), \
+             patch.object(RUN_MOD.tempfile, "mktemp") as create_disk, \
+             patch.object(RUN_MOD.subprocess, "Popen") as launch:
+            results = RUN_MOD.run_test(
+                SimpleNamespace(name="qemu"), "kernel", name, 5)
+        assert results[0][:2] == (name, "SKIP"), (path, results)
+        create_disk.assert_not_called()
+        launch.assert_not_called()
+
+        for backend, api, banner, error_type, reason in (
+                ("qemu", "api", True, RUN_MOD._SidecarSkip,
+                 "backend is not CH"),
+                ("ch", None, True, RUN_MOD._SidecarSkip,
+                 "api socket disabled"),
+                ("ch", "api", False, RuntimeError,
+                 "guest harness banner not seen")):
+            ctx = SimpleNamespace(
+                backend=SimpleNamespace(name=backend), api_sock=api,
+                skip=skip, wait_text=Mock(return_value=banner),
+                vm_api=Mock(), log=Mock())
+            try:
+                sidecar.run(ctx)
+            except error_type as error:
+                assert str(error) == reason, (path, str(error))
+            else:
+                raise AssertionError(f"{path} ignored {reason}")
+            ctx.vm_api.assert_not_called()
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch("time.sleep"):
+            success = subprocess.CompletedProcess([], 0, "", "")
+            ctx = SimpleNamespace(
+                backend=SimpleNamespace(name="ch"), api_sock="api",
+                tmpdir=tmpdir, skip=skip,
+                wait_text=Mock(return_value=True), log=Mock(),
+                vm_api=Mock(return_value=success))
+            sidecar.run(ctx)
+            commands = ctx.vm_api.call_args_list
+            assert commands, f"{path} performed no host actions"
+            ctx.wait_text.assert_called_once_with("[vv]", timeout=20.0)
+            assert ctx.log.called, f"{path} did not report completion"
+            completion = ctx.log.call_args.args[0]
+
+            for index, command in enumerate(commands):
+                for failure in (
+                        subprocess.CompletedProcess([], 1, "out", "err"),
+                        RuntimeError("API connection failed")):
+                    ctx.log.reset_mock()
+                    ctx.vm_api.reset_mock()
+                    ctx.vm_api.side_effect = (
+                        [success] * index + [failure] +
+                        [success] * len(commands))
+                    try:
+                        sidecar.run(ctx)
+                    except RuntimeError as error:
+                        if isinstance(failure, RuntimeError):
+                            assert error is failure, (path, str(error))
+                        else:
+                            assert command.args[0] in str(error), (
+                                path, command, str(error))
+                            diagnostics = str(error) + " ".join(
+                                entry.args[0]
+                                for entry in ctx.log.call_args_list)
+                            assert "rc=1" in diagnostics, (path, diagnostics)
+                            assert "err" in diagnostics, (path, diagnostics)
+                    else:
+                        raise AssertionError(
+                            f"{path} ignored {command.args[0]} failure")
+                    assert ctx.vm_api.call_args_list[:index + 1] == (
+                        commands[:index + 1]), path
+                    assert completion not in [
+                        entry.args[0] for entry in ctx.log.call_args_list], path
+    assert checked, "no CH sidecars were checked"
+
+
 def test_unit_sidecar_runtime_skip_preserves_failures():
     from types import SimpleNamespace
     from unittest.mock import patch
