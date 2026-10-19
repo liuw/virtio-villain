@@ -1846,27 +1846,41 @@ def test_unit_sidecar_exception_overrides_guest_verdict():
         console_device = "ttyS0"
         mmio_transport = False
 
-        def __init__(self, verdict):
+        def __init__(self, verdict, detail=""):
             self.verdict = verdict
+            self.detail = detail
 
         def build_cmd(self, kernel, initramfs, disk_path, cmdline, opts=None):
             return ["sh", "-c",
-                    f"sleep 0.1; printf '[{self.verdict}] T0001\\n'"]
+                    f"sleep 0.1; printf '[{self.verdict}] T0001"
+                    f"{self.detail}\\n'"]
 
     def fail_action(ctx):
         raise RuntimeError("required host action failed")
 
     sidecar = SimpleNamespace(run=fail_action)
-    for verdict in ("PASS", "REJECT", "SKIP", "XFAIL", "XPASS", "FAIL"):
+    cases = [(verdict, "", "FAIL") for verdict in (
+        "PASS", "REJECT", "SKIP", "XFAIL", "XPASS", "FAIL")]
+    cases += [
+        ("SKIP", " (no device 0x1051)", "SKIP"),
+        ("PASS", " (no device 0x1051)", "FAIL"),
+        ("SKIP", " (feature unavailable)", "FAIL"),
+    ]
+    for verdict, detail, expected in cases:
         with patch.object(RUN_MOD, "_find_sidecar", return_value="sidecar"), \
              patch.object(RUN_MOD, "_load_sidecar", return_value=sidecar):
             results = RUN_MOD.run_test(
-                Backend(verdict), "kernel", "T0001",
+                Backend(verdict, detail), "kernel", "T0001",
                 5, 0, False, "raw", {})
         _, status, output = results[0]
-        assert status == "FAIL", (verdict, status, output)
-        assert "[vv-sidecar] FAIL: required host action failed" in output
-        assert "RuntimeError" in output
+        assert status == expected, (verdict, detail, status, output)
+        if expected == "SKIP":
+            assert "[vv-sidecar] SKIP: guest device unavailable" in output
+            assert "required host action failed" in output
+            assert "[vv-sidecar] FAIL:" not in output
+        else:
+            assert "[vv-sidecar] FAIL: required host action failed" in output
+            assert "RuntimeError" in output
 
 
 def test_unit_sidecar_unsupported_backend_skips_before_setup():

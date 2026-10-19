@@ -1815,9 +1815,16 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
                 if status not in ("FAIL", "WEDGED", "XPASS"):
                     status = "SKIP"
             if err is not None:
-                extra += f"\n[vv-sidecar] FAIL: {err[0]}\n{err[1]}\n"
-                if status != "WEDGED":
-                    status = "FAIL"
+                missing_device = status == "SKIP" and re.search(
+                    r"\[SKIP\]\s+" + re.escape(test_names[0])
+                    + r"\s+\(no device 0x[0-9a-fA-F]+\)", parse_text)
+                if missing_device:
+                    extra += ("\n[vv-sidecar] SKIP: guest device unavailable"
+                              f"; host action stopped: {err[0]}\n")
+                else:
+                    extra += f"\n[vv-sidecar] FAIL: {err[0]}\n{err[1]}\n"
+                    if status != "WEDGED":
+                        status = "FAIL"
             output += extra
         if sidecar_tmpdir:
             shutil.rmtree(sidecar_tmpdir, ignore_errors=True)
