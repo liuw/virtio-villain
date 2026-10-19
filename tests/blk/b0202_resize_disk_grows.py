@@ -7,7 +7,7 @@ import os
 
 from host_helpers import qmp, wait_ready
 
-SUPPORTED_BACKENDS = ("ch", "qemu")
+SUPPORTED_BACKENDS = ("ch", "qemu", "qemu-mmio")
 
 
 def run(ctx):
@@ -16,7 +16,7 @@ def run(ctx):
     cur = os.path.getsize(ctx.disk)
     new = cur + 16 * 1024 * 1024
     ctx.log(f"resizing disk from {cur} to {new} bytes")
-    if ctx.backend.name in ("qemu",):
+    if ctx.backend.name in ("qemu", "qemu-mmio"):
         qmp(ctx, "block_resize", {"device": "vd0", "size": new})
         ctx.log("block_resize completed")
         return

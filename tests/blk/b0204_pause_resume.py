@@ -5,5 +5,5 @@ a read on either side of the pause window and asserts both succeed.
 """
 from host_helpers import pause_resume
 
-SUPPORTED_BACKENDS = ("ch", "qemu", "openvmm")
+SUPPORTED_BACKENDS = ("ch", "qemu", "qemu-mmio", "openvmm")
 run = pause_resume

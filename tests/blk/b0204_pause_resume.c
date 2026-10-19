@@ -13,6 +13,7 @@
 #include "lib/vring.h"
 #include "lib/virtio_pci.h"
 #include "lib/virtio_spec.h"
+#include "tests/blk/blk_mmio_helpers.h"
 
 #include <unistd.h>
 
@@ -54,3 +55,5 @@ static test_result_t test_blk_pause_resume(struct virtio_dev *dev,
 REGISTER_TEST(B0204, VIRTIO_PCI_DEVICE_BLK, test_blk_pause_resume,
               "virtio-blk survives a pause and resume cycle",
               VIRTIO_SPEC_V1_2, "2.6");
+
+REGISTER_MMIO_VARIANT(B0204, 2, blk_mmio_host_cycle);

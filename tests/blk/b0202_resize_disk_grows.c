@@ -16,6 +16,7 @@
 #include "lib/vring.h"
 #include "lib/virtio_pci.h"
 #include "lib/virtio_spec.h"
+#include "tests/blk/blk_mmio_helpers.h"
 
 #include <stdio.h>
 #include <unistd.h>
@@ -55,3 +56,46 @@ static test_result_t test_blk_resize_disk_grows(struct virtio_dev *dev,
 REGISTER_TEST(B0202, VIRTIO_PCI_DEVICE_BLK, test_blk_resize_disk_grows,
               "virtio-blk resize-disk grows capacity and bumps config_generation",
               VIRTIO_SPEC_V1_2, "5.2.4");
+
+static int mmio_capacity(struct virtio_mmio_dev *dev, uint64_t *capacity)
+{
+    for (int attempt = 0; attempt < 100; attempt++) {
+        uint32_t before = mmio_read32(dev, VIRTIO_MMIO_CONFIG_GENERATION);
+        *capacity = mmio_read32(dev, VIRTIO_MMIO_CONFIG);
+        *capacity |= (uint64_t)mmio_read32(dev, VIRTIO_MMIO_CONFIG + 4) << 32;
+        uint32_t after = mmio_read32(dev, VIRTIO_MMIO_CONFIG_GENERATION);
+        if (before == after)
+            return 0;
+    }
+    return -1;
+}
+
+static test_result_t test_blk_resize_mmio(struct virtio_mmio_dev *dev)
+{
+    struct vring ring;
+    test_result_t result = blk_mmio_attach(dev, &ring);
+    if (result != TEST_PASS)
+        return result;
+    uint64_t capacity;
+    if (mmio_capacity(dev, &capacity) < 0)
+        TFAIL("MMIO block config generation never stabilized");
+    uint32_t generation = mmio_read32(dev, VIRTIO_MMIO_CONFIG_GENERATION);
+    puts("vv-mmio-ready");
+    fflush(stdout);
+    for (int i = 0; i < 15000; i += 10) {
+        uint64_t current;
+        if (mmio_capacity(dev, &current) < 0)
+            TFAIL("MMIO block config generation never stabilized");
+        if (current != capacity) {
+            if (current <= capacity)
+                TFAIL("MMIO block capacity did not grow");
+            if (mmio_read32(dev, VIRTIO_MMIO_CONFIG_GENERATION) == generation)
+                TFAIL("MMIO config generation did not change after resize");
+            return blk_mmio_read(dev, &ring, 0);
+        }
+        usleep(10000);
+    }
+    TFAIL("MMIO disk resize did not update capacity");
+}
+
+REGISTER_MMIO_VARIANT(B0202, 2, test_blk_resize_mmio);
