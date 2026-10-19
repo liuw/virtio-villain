@@ -4,16 +4,24 @@ B0205 sidecar. Grows guest RAM through resize --memory while the
 guest keeps block reads in flight, so the block device serves I/O
 across a guest memory map change.
 """
-SUPPORTED_BACKENDS = ("ch",)
+from host_helpers import qmp, wait_ready
+
+SUPPORTED_BACKENDS = ("ch", "qemu")
 
 
 def run(ctx):
-    if ctx.backend.name != "ch":
-        ctx.skip("backend is not CH")
-    if ctx.api_sock is None:
-        ctx.skip("api socket disabled")
-    if not ctx.wait_text("[vv]", timeout=20.0):
-        raise RuntimeError("guest harness banner not seen")
+    wait_ready(ctx)
+
+    if ctx.backend.name == "qemu":
+        qmp(ctx, "object-add", {
+            "qom-type": "memory-backend-ram", "id": "hpmem",
+            "size": 128 * 1024 * 1024,
+        })
+        qmp(ctx, "device_add", {
+            "driver": "pc-dimm", "id": "hp_dimm", "memdev": "hpmem",
+        })
+        ctx.log("added 128M guest memory")
+        return
 
     # Boot RAM is 512M with hotplug_size=256M, so 640M is in range.
     ctx.log("resizing guest memory to 640M")
