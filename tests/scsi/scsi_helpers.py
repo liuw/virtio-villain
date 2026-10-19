@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Shared QEMU SCSI host actions."""
+
+import os
+
+
+def wait_armed(ctx):
+    if ctx.backend.name != "qemu":
+        ctx.skip("backend is not QEMU")
+    if ctx.api_sock is None:
+        ctx.skip("api socket disabled")
+    if not ctx.wait_text("vv-scsi-armed", timeout=20.0):
+        raise RuntimeError("guest did not arm the event queue")
+
+
+def qmp(ctx, command, arguments):
+    response = ctx.vm_api(command, arguments)
+    ctx.log(f"{command}: {response}")
+    if (not isinstance(response, dict) or "error" in response
+            or "return" not in response):
+        raise RuntimeError(f"QMP {command} failed: {response!r}")
+    return response
+
+
+def hot_add(ctx):
+    hp = os.path.join(ctx.tmpdir, "hp.raw")
+    with open(hp, "wb") as image:
+        image.truncate(16 * 1024 * 1024)
+    ctx.log(f"created hot plug image {hp}")
+    qmp(ctx, "blockdev-add", {
+        "driver": "raw",
+        "node-name": "hpnode",
+        "file": {"driver": "file", "filename": hp},
+    })
+    qmp(ctx, "device_add", {
+        "driver": "scsi-hd",
+        "drive": "hpnode",
+        "bus": "scsi0.0",
+        "channel": 0,
+        "scsi-id": 0,
+        "lun": 2,
+        "id": "hpdev",
+    })
+
+
+def throttle(ctx):
+    wait_armed(ctx)
+    qmp(ctx, "block_set_io_throttle", {
+        "device": "scsidisk",
+        "bps": 0, "bps_rd": 0, "bps_wr": 0,
+        "iops": 1, "iops_rd": 0, "iops_wr": 0,
+    })
+    ctx.log("I/O throttle configured")
