@@ -2038,6 +2038,68 @@ def test_unit_sidecar_runtime_skip_preserves_failures():
         assert "Traceback" not in output
 
 
+def _sidecar_api_context():
+    import threading
+    from types import SimpleNamespace
+
+    return RUN_MOD._Ctx(
+        test_id="T0001", backend=SimpleNamespace(name="ch"),
+        vmm_pid=None, tmpdir="/tmp", api_sock="api", disk="disk",
+        log=lambda message: None, output_buf=[],
+        output_lock=threading.Lock(), stop_event=threading.Event())
+
+
+def test_unit_sidecar_api_rejects_exited_vmm():
+    from unittest.mock import patch
+
+    ctx = _sidecar_api_context()
+    with patch.object(ctx, "vm_alive", return_value=False), \
+         patch.object(RUN_MOD, "vm_api") as api:
+        try:
+            ctx.vm_api("pause")
+        except RuntimeError as error:
+            assert "VMM exited before API command pause" in str(error)
+        else:
+            raise AssertionError("exited VMM reported API success")
+    api.assert_not_called()
+
+
+def test_unit_sidecar_api_preserves_responses():
+    from unittest.mock import patch
+
+    ctx = _sidecar_api_context()
+    responses = [
+        subprocess.CompletedProcess(["pause"], 1, "out", message)
+        for message in (
+            "Connection refused", "os error 111", "Connection reset",
+            "os error 104", "Broken pipe", "os error 32",
+            "command failed")
+    ]
+    responses += [subprocess.CompletedProcess(["pause"], 0, "ok", ""),
+                  {"return": {}}, {"error": {"desc": "command failed"}}]
+    for response in responses:
+        with patch.object(ctx, "vm_alive", return_value=True), \
+             patch.object(RUN_MOD, "vm_api", return_value=response) as api:
+            assert ctx.vm_api("pause", ["arg"], timeout=3) is response
+        api.assert_called_once_with(
+            "api", ctx.backend, "pause", ["arg"], timeout=3)
+
+
+def test_unit_sidecar_api_preserves_connection_exceptions():
+    from unittest.mock import patch
+
+    ctx = _sidecar_api_context()
+    error = ConnectionRefusedError("API unavailable")
+    with patch.object(ctx, "vm_alive", return_value=True), \
+         patch.object(RUN_MOD, "vm_api", side_effect=error):
+        try:
+            ctx.vm_api("pause")
+        except ConnectionRefusedError as caught:
+            assert caught is error
+        else:
+            raise AssertionError("connection error reported API success")
+
+
 def test_unit_probe_filter_excludes_missing_device():
     """Tests targeting a device not in available_devices are excluded."""
     tests = ["RNG0001", "RTC0022", "D0001"]

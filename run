@@ -1276,32 +1276,15 @@ class _Ctx:
     def vm_api(self, command, args=None, timeout=None):
         """Convenience wrapper. Calls vm_api with this context's
         api_sock and backend. Raises RuntimeError if the api socket
-        is disabled. When the VMM has already exited returns a
-        synthetic completed process with returncode 0 so the sidecar
-        does not have to special case post test races. Connection
-        refused on the API socket is treated the same way because the
-        VMM may exit between the alive check and the actual request.
+        is disabled or the VMM has already exited. API responses and
+        connection errors are passed through without changing them.
         """
         if self.api_sock is None:
             raise RuntimeError("api socket disabled for this test")
         if not self.vm_alive():
-            return subprocess.CompletedProcess(
-                args=[command], returncode=0,
-                stdout="", stderr="vmm exited"
-            )
-        cp = vm_api(self.api_sock, self.backend, command, args,
-                    timeout=timeout)
-        if (isinstance(cp, subprocess.CompletedProcess)
-                and cp.returncode != 0):
-            msg = (cp.stderr or "") + (cp.stdout or "")
-            if ("Connection refused" in msg or "os error 111" in msg
-                    or "Connection reset" in msg or "os error 104" in msg
-                    or "Broken pipe" in msg or "os error 32" in msg):
-                return subprocess.CompletedProcess(
-                    args=cp.args, returncode=0,
-                    stdout=cp.stdout, stderr="vmm exited"
-                )
-        return cp
+            raise RuntimeError(f"VMM exited before API command {command}")
+        return vm_api(self.api_sock, self.backend, command, args,
+                      timeout=timeout)
 
     def vm_alive(self):
         """Return True if the VMM process is still around. The guest
