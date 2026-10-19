@@ -1149,6 +1149,7 @@ def _find_virtiofsd():
 # host oversubscription factor so sidecars do not flake with a hard
 # 5s ceiling when ch-remote and the CH API thread are CPU starved.
 _VM_API_TIMEOUT = 5.0
+_SIDECAR_JOIN_TIMEOUT = 5.0
 
 
 def vm_api(api_socket, backend, command, args=None, timeout=None):
@@ -1802,10 +1803,12 @@ def run_test(backend, kernel, test_name, timeout, verbose=0, console=False,
             err_thread.join(timeout=5)
         sidecar_stop.set()
         if sidecar_thread is not None:
-            sidecar_thread.join(timeout=5.0)
-            if sidecar_thread.is_alive():
-                output += "\n[vv-sidecar] WARN: did not exit within 5s\n"
+            sidecar_thread.join(timeout=_SIDECAR_JOIN_TIMEOUT)
             err = sidecar_state.get("err")
+            if sidecar_thread.is_alive():
+                err = (RuntimeError(
+                    "host action did not exit within "
+                    f"{_SIDECAR_JOIN_TIMEOUT:g}s"), "")
             extra = ""
             if sidecar_log_lines:
                 extra += "\n" + "\n".join(sidecar_log_lines) + "\n"

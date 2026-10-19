@@ -1883,6 +1883,63 @@ def test_unit_sidecar_exception_overrides_guest_verdict():
             assert "RuntimeError" in output
 
 
+def test_unit_sidecar_unfinished_action_fails():
+    import threading
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    class Backend:
+        name = "fake"
+        console_device = "ttyS0"
+        mmio_transport = False
+
+        def build_cmd(self, kernel, initramfs, disk_path, cmdline, opts=None):
+            return ["sh", "-c", f"printf '{marker}\\n'"]
+
+    original_join = threading.Thread.join
+    for marker, expected in (
+            ("[PASS] T0001", "FAIL"),
+            ("[REJECT] T0001", "FAIL"),
+            ("[SKIP] T0001", "FAIL"),
+            ("[XFAIL] T0001", "FAIL"),
+            ("[XPASS] T0001", "FAIL"),
+            ("[FAIL] T0001", "FAIL"),
+            ("[WEDGED] T0001", "WEDGED"),
+            ("[SKIP] T0001 (no device 0x1051)", "SKIP")):
+        release = threading.Event()
+        threads = []
+
+        def action(ctx):
+            release.wait()
+
+        def join(thread, timeout=None):
+            if thread.name == "sidecar-T0001":
+                assert timeout == RUN_MOD._SIDECAR_JOIN_TIMEOUT
+                threads.append(thread)
+                return original_join(thread, timeout=0.01)
+            return original_join(thread, timeout)
+
+        try:
+            with patch.object(RUN_MOD, "_find_sidecar", return_value="sidecar"), \
+                 patch.object(RUN_MOD, "_load_sidecar",
+                              return_value=SimpleNamespace(run=action)), \
+                 patch.object(threading.Thread, "join", join):
+                results = RUN_MOD.run_test(Backend(), "kernel", "T0001", 5)
+            _, status, output = results[0]
+            assert status == expected, (marker, status, output)
+            assert ("host action did not exit within "
+                    f"{RUN_MOD._SIDECAR_JOIN_TIMEOUT:g}s") in output
+            if expected == "SKIP":
+                assert "[vv-sidecar] FAIL:" not in output
+            else:
+                assert "[vv-sidecar] FAIL:" in output
+        finally:
+            release.set()
+            for thread in threads:
+                original_join(thread, timeout=1)
+                assert not thread.is_alive()
+
+
 def test_unit_sidecar_unsupported_backend_skips_before_setup():
     from types import SimpleNamespace
     from unittest.mock import Mock, patch
