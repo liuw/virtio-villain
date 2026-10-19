@@ -1911,7 +1911,7 @@ def test_unit_sidecar_supported_backend_runs():
         action.assert_called_once()
 
 
-def test_unit_ch_sidecar_outcomes():
+def test_unit_sidecar_outcomes():
     import glob
     from types import SimpleNamespace
     from unittest.mock import Mock, patch
@@ -1923,26 +1923,31 @@ def test_unit_ch_sidecar_outcomes():
     for path in sorted(glob.glob(
             os.path.join(ROOT_DIR, "tests", "*", "*.py"))):
         sidecar = RUN_MOD._load_sidecar(path)
-        if getattr(sidecar, "SUPPORTED_BACKENDS", None) != ("ch",):
+        supported = getattr(sidecar, "SUPPORTED_BACKENDS", None)
+        if supported not in (("ch",), ("qemu",)):
             continue
+        backend_name = supported[0]
+        other_backend = "qemu" if backend_name == "ch" else "ch"
+        banner_text = "[vv]" if backend_name == "ch" else "vv-scsi-armed"
+        banner_error = ("guest harness banner not seen" if backend_name == "ch"
+                        else "guest did not arm the event queue")
         checked.append(path)
         name = os.path.basename(path).split("_", 1)[0].upper()
         with patch.object(RUN_MOD, "_find_sidecar", return_value=path), \
              patch.object(RUN_MOD.tempfile, "mktemp") as create_disk, \
              patch.object(RUN_MOD.subprocess, "Popen") as launch:
             results = RUN_MOD.run_test(
-                SimpleNamespace(name="qemu"), "kernel", name, 5)
+                SimpleNamespace(name=other_backend), "kernel", name, 5)
         assert results[0][:2] == (name, "SKIP"), (path, results)
         create_disk.assert_not_called()
         launch.assert_not_called()
 
         for backend, api, banner, error_type, reason in (
-                ("qemu", "api", True, RUN_MOD._SidecarSkip,
-                 "backend is not CH"),
-                ("ch", None, True, RUN_MOD._SidecarSkip,
+                (other_backend, "api", True, RUN_MOD._SidecarSkip,
+                 f"backend is not {backend_name.upper()}"),
+                (backend_name, None, True, RUN_MOD._SidecarSkip,
                  "api socket disabled"),
-                ("ch", "api", False, RuntimeError,
-                 "guest harness banner not seen")):
+                (backend_name, "api", False, RuntimeError, banner_error)):
             ctx = SimpleNamespace(
                 backend=SimpleNamespace(name=backend), api_sock=api,
                 skip=skip, wait_text=Mock(return_value=banner),
@@ -1959,22 +1964,27 @@ def test_unit_ch_sidecar_outcomes():
             disk = os.path.join(tmpdir, "disk.raw")
             with open(disk, "wb") as image:
                 image.truncate(16 * 1024 * 1024)
-            success = subprocess.CompletedProcess([], 0, "", "")
+            success = (subprocess.CompletedProcess([], 0, "", "")
+                       if backend_name == "ch" else {"return": {}})
             ctx = SimpleNamespace(
-                backend=SimpleNamespace(name="ch"), api_sock="api",
+                backend=SimpleNamespace(name=backend_name), api_sock="api",
                 tmpdir=tmpdir, disk=disk, skip=skip,
                 wait_text=Mock(return_value=True), log=Mock(),
                 vm_api=Mock(return_value=success))
             sidecar.run(ctx)
             commands = ctx.vm_api.call_args_list
             assert commands, f"{path} performed no host actions"
-            ctx.wait_text.assert_called_once_with("[vv]", timeout=20.0)
+            ctx.wait_text.assert_called_once_with(banner_text, timeout=20.0)
             assert ctx.log.called, f"{path} did not report completion"
             completion = ctx.log.call_args.args[0]
 
             for index, command in enumerate(commands):
-                for failure in (
-                        subprocess.CompletedProcess([], 1, "out", "err"),
+                responses = ([subprocess.CompletedProcess([], 1, "out", "err")]
+                             if backend_name == "ch" else [
+                                 {"error": {"class": "GenericError",
+                                            "desc": "command failed"}},
+                                 b"invalid reply", {}, None])
+                for failure in (*responses,
                         RuntimeError("API connection failed"),
                         subprocess.TimeoutExpired(command.args[0], 30)):
                     ctx.log.reset_mock()
@@ -1993,8 +2003,12 @@ def test_unit_ch_sidecar_outcomes():
                             diagnostics = str(error) + " ".join(
                                 entry.args[0]
                                 for entry in ctx.log.call_args_list)
-                            assert "rc=1" in diagnostics, (path, diagnostics)
-                            assert "err" in diagnostics, (path, diagnostics)
+                            if backend_name == "ch":
+                                assert "rc=1" in diagnostics, (path, diagnostics)
+                                assert "err" in diagnostics, (path, diagnostics)
+                            else:
+                                assert repr(failure) in diagnostics, (
+                                    path, diagnostics)
                     else:
                         raise AssertionError(
                             f"{path} ignored {command.args[0]} failure")
@@ -2002,7 +2016,7 @@ def test_unit_ch_sidecar_outcomes():
                         commands[:index + 1]), path
                     assert completion not in [
                         entry.args[0] for entry in ctx.log.call_args_list], path
-    assert checked, "no CH sidecars were checked"
+    assert checked, "no sidecars were checked"
 
 
 def test_unit_sidecar_runtime_skip_preserves_failures():
