@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <fcntl.h>
+#include <errno.h>
 
 static test_result_t test_pci_id_validation(struct virtio_dev *dev,
                                             struct vring *vr)
@@ -24,28 +25,30 @@ static test_result_t test_pci_id_validation(struct virtio_dev *dev,
 
     /* Read PCI config via sysfs */
     char path[512];
-    snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/vendor", dev->slot);
+    snprintf(path, sizeof(path), "%s/vendor", dev->slot);
     int fd = open(path, O_RDONLY);
     if (fd < 0)
-        return TEST_SKIP;
+        TFAIL("open %s: %s", path, strerror(errno));
 
     char buf[32] = {0};
     ssize_t r = read(fd, buf, sizeof(buf) - 1);
-    (void)r;
     close(fd);
+    if (r <= 0)
+        TFAIL("read %s returned %zd", path, r);
 
     unsigned long vendor = strtoul(buf, NULL, 16);
     if (vendor != 0x1AF4)
         TFAIL("vendor != 0x1AF4");
 
-    snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/device", dev->slot);
+    snprintf(path, sizeof(path), "%s/device", dev->slot);
     fd = open(path, O_RDONLY);
     if (fd < 0)
-        return TEST_SKIP;
+        TFAIL("open %s: %s", path, strerror(errno));
     memset(buf, 0, sizeof(buf));
     r = read(fd, buf, sizeof(buf) - 1);
-    (void)r;
     close(fd);
+    if (r <= 0)
+        TFAIL("read %s returned %zd", path, r);
 
     unsigned long device = strtoul(buf, NULL, 16);
     /* Modern virtio: 0x1040 + device_type */
