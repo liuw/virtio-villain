@@ -198,8 +198,6 @@ in. The test to run is selected via kernel command line:
 
 Since a successful test may crash the VMM, `run` spawns a fresh VM per test and collects results across invocations.
 
-Tests with an M prefix automatically use the QEMU MMIO backend. Use `--transport mmio` with a QEMU binary to run other tests that support MMIO.
-
 List available tests on the host (output adapts to terminal width,
 truncating long descriptions with `~`):
 
@@ -302,7 +300,7 @@ Pipe to a file or through `| cat` to suppress colors.
 ./run -m ./cloud-hypervisor -k /path/to/vmlinux            # custom kernel
 ./run -m ./cloud-hypervisor --init /build/init --initramfs /build/initramfs.cpio.gz
 ./run -m ./cloud-hypervisor -d qcow2                       # use qcow2 backing
-./run -m ./cloud-hypervisor M01                            # MMIO test, auto launches QEMU microvm if needed
+./run -m ./qemu-system-x86_64 --transport mmio             # MMIO transport
 ./run -m ./qemu-system-x86_64                              # QEMU backend
 ./run -m ./openvmm                                         # OpenVMM backend (Linux direct boot, native PCIe)
 ./run -m ./cloud-hypervisor -v T01                         # verbose, full test output
