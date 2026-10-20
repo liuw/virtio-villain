@@ -2961,6 +2961,7 @@ def main():
                 probe_opts["pmem_path"] = os.path.join(directory, "pmem")
                 probe_opts["scsi_path"] = os.path.join(directory, "scsi")
                 probe_opts["scsi_path2"] = os.path.join(directory, "scsi2")
+                probe_opts["exit_on_guest_end"] = True
                 probe_opts.pop("api_enabled", None)
                 probe_opts.pop("api_socket", None)
                 skip_ic = [
@@ -2981,10 +2982,32 @@ def main():
                 probe_cmd = probe_backend.build_cmd(
                     probe_kernel, args.initramfs, probe_disk,
                     probe_cmdline, probe_opts)
-                result = subprocess.run(
-                    probe_cmd, stdin=subprocess.DEVNULL,
-                    capture_output=True, timeout=15,
-                    start_new_session=True)
+                master_fd = slave_fd = None
+                launch_opts = {"stdin": subprocess.DEVNULL,
+                               "start_new_session": True}
+                if probe_backend.name == "openvmm":
+                    master_fd, slave_fd = pty.openpty()
+                    launch_opts = {
+                        "stdin": slave_fd,
+                        "start_new_session": False,
+                        "preexec_fn": _ctty_preexec(
+                            os.ttyname(slave_fd).encode()),
+                    }
+                try:
+                    result = subprocess.run(
+                        probe_cmd, capture_output=True, timeout=args.timeout,
+                        **launch_opts)
+                finally:
+                    if slave_fd is not None:
+                        os.close(slave_fd)
+                    if master_fd is not None:
+                        os.close(master_fd)
+                if b"PROBE\t" not in result.stdout:
+                    detail = (result.stdout + result.stderr).decode(
+                        errors="replace").strip()
+                    raise RuntimeError(
+                        f"probe exited with status {result.returncode} "
+                        f"without device records\n{detail[-2000:]}")
                 return result.stdout
 
         probes = {}
