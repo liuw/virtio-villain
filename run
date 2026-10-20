@@ -1201,7 +1201,8 @@ def _probe_cache_key(backend, kernel, initramfs, opts):
 
 def _probe_records(output):
     records = []
-    for line in output.decode(errors="replace").splitlines():
+    cleaned = _clean_result_output(output.decode(errors="replace"))
+    for line in cleaned.splitlines():
         if not line.startswith("PROBE\t"):
             continue
         parts = line.split("\t")
@@ -3002,13 +3003,15 @@ def main():
                         os.close(slave_fd)
                     if master_fd is not None:
                         os.close(master_fd)
-                if b"PROBE\t" not in result.stdout:
+                cleaned = _clean_result_output(
+                    result.stdout.decode(errors="replace"))
+                if "PROBE\t" not in cleaned:
                     detail = (result.stdout + result.stderr).decode(
                         errors="replace").strip()
                     raise RuntimeError(
                         f"probe exited with status {result.returncode} "
                         f"without device records\n{detail[-2000:]}")
-                return result.stdout
+                return cleaned.encode()
 
         probes = {}
         filtered = []
