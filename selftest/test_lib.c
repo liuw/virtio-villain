@@ -458,6 +458,44 @@ static void test_perf_multi_queue_accounting(void)
                   "two queues and cleanup count actual notifications");
 }
 
+static void test_vring_prepare(void)
+{
+    struct virtio_pci_common_cfg cfg = {0};
+    struct virtio_dev dev = { .common = &cfg };
+    struct vring_avail avail = {0};
+    struct vring vr = {
+        .avail = &avail,
+        .desc_phys = 0x1234567800001000ULL,
+        .avail_phys = 0x2345678900002000ULL,
+        .used_phys = 0x3456789a00003000ULL,
+        .size = 8,
+    };
+
+    vring_prepare(&dev, &vr, 3);
+    CHECK(vr.queue == 3 && cfg.queue_select == 3,
+          "vring_prepare selects the requested queue");
+    CHECK(cfg.queue_size == 8, "vring_prepare sets queue size");
+    CHECK(virtio_load64(&cfg.queue_desc) == vr.desc_phys,
+          "vring_prepare sets descriptor address");
+    CHECK(virtio_load64(&cfg.queue_avail) == vr.avail_phys,
+          "vring_prepare sets available ring address");
+    CHECK(virtio_load64(&cfg.queue_used) == vr.used_phys,
+          "vring_prepare sets used ring address");
+    CHECK(cfg.queue_msix_vector == 0xffff,
+          "vring_prepare defaults to no MSI-X vector");
+    CHECK(avail.flags == VRING_AVAIL_F_NO_INTERRUPT,
+          "vring_prepare suppresses interrupts by default");
+    CHECK(cfg.queue_enable == 0, "vring_prepare leaves the queue disabled");
+
+    vring_attach(&dev, &vr, 2);
+    CHECK(vr.queue == 2 && cfg.queue_select == 2,
+          "vring_attach still selects the requested queue");
+    CHECK(cfg.queue_enable == 1, "vring_attach still enables the queue");
+    CHECK(cfg.queue_msix_vector == 0xffff &&
+          avail.flags == VRING_AVAIL_F_NO_INTERRUPT,
+          "vring_attach still suppresses interrupts");
+}
+
 /* --- Test registry --- */
 
 static void test_registry(void)
@@ -499,6 +537,7 @@ int main(void)
     test_struct_sizes();
     test_raw_set_desc();
     test_raw_set_avail();
+    test_vring_prepare();
       test_vring_submit_wrap();
       test_vring_submit_batch();
       test_vring_event_idx();
