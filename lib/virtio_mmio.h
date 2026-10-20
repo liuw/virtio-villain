@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 
+#include "mmio.h"
+
 /* MMIO register offsets (spec 4.2.2) */
 #define VIRTIO_MMIO_MAGIC_VALUE         0x000
 #define VIRTIO_MMIO_VERSION             0x004
@@ -63,38 +65,38 @@ struct virtio_mmio_dev {
 /* Read/write helpers for MMIO registers (always 32-bit as per spec). */
 static inline uint32_t mmio_read32(struct virtio_mmio_dev *dev, uint32_t offset)
 {
-    return *(volatile uint32_t *)((char *)dev->base + offset);
+    return vv_mmio_read32((const volatile char *)dev->base + offset);
 }
 
 static inline void mmio_write32(struct virtio_mmio_dev *dev, uint32_t offset,
                                 uint32_t val)
 {
-    *(volatile uint32_t *)((char *)dev->base + offset) = val;
+    vv_mmio_write32((volatile char *)dev->base + offset, val);
     __sync_synchronize();
 }
 
 /* Wrong-width access helpers for tests (intentional violations). */
 static inline uint8_t mmio_read8(struct virtio_mmio_dev *dev, uint32_t offset)
 {
-    return *(volatile uint8_t *)((char *)dev->base + offset);
+    return vv_mmio_read8((const volatile char *)dev->base + offset);
 }
 
 static inline uint16_t mmio_read16(struct virtio_mmio_dev *dev, uint32_t offset)
 {
-    return *(volatile uint16_t *)((char *)dev->base + offset);
+    return vv_mmio_read16((const volatile char *)dev->base + offset);
 }
 
 static inline void mmio_write8(struct virtio_mmio_dev *dev, uint32_t offset,
                                uint8_t val)
 {
-    *(volatile uint8_t *)((char *)dev->base + offset) = val;
+    vv_mmio_write8((volatile char *)dev->base + offset, val);
     __sync_synchronize();
 }
 
 static inline void mmio_write16(struct virtio_mmio_dev *dev, uint32_t offset,
                                 uint16_t val)
 {
-    *(volatile uint16_t *)((char *)dev->base + offset) = val;
+    vv_mmio_write16((volatile char *)dev->base + offset, val);
     __sync_synchronize();
 }
 

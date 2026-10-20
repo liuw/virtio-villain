@@ -142,6 +142,7 @@ selftest: selftest/test_lib
 	@python3 selftest/test_perf.py
 
 selftest/test_lib: selftest/test_lib.c \
+		   lib/mmio.h lib/virtio_mmio.h lib/virtio_pci.h \
 		   lib/perf_engine.c lib/perf_engine.h \
 		   lib/vring.c lib/vring.h \
 		   lib/vring_packed.c lib/vring_packed.h \

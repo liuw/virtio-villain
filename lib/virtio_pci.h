@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 
+#include "mmio.h"
+
 /* Virtio PCI capability types (spec 4.1.4) */
 #define VIRTIO_PCI_CAP_COMMON_CFG    1
 #define VIRTIO_PCI_CAP_NOTIFY_CFG    2
@@ -147,9 +149,9 @@ static inline int virtio_pci_feature_offered(struct virtio_dev *dev,
 {
     volatile struct virtio_pci_common_cfg *cfg = dev->common;
 
-    cfg->device_feature_select = bit >> 5;
+    vv_mmio_write32(&cfg->device_feature_select, bit >> 5);
     __sync_synchronize();
-    return (cfg->device_feature >> (bit & 31)) & 1u;
+    return (vv_mmio_read32(&cfg->device_feature) >> (bit & 31)) & 1u;
 }
 
 /* Reset device (set status to 0). */
@@ -173,15 +175,15 @@ void virtio_pci_kick(struct virtio_dev *dev, uint16_t queue);
 static inline void virtio_store64(volatile void *dst, uint64_t val)
 {
     volatile uint32_t *p = (volatile uint32_t *)dst;
-    p[0] = (uint32_t)val;
-    p[1] = (uint32_t)(val >> 32);
+    vv_mmio_write32(p, (uint32_t)val);
+    vv_mmio_write32(p + 1, (uint32_t)(val >> 32));
 }
 
 static inline uint64_t virtio_load64(volatile const void *src)
 {
     volatile const uint32_t *p = (volatile const uint32_t *)src;
-    uint64_t lo = p[0];
-    uint64_t hi = p[1];
+    uint64_t lo = vv_mmio_read32(p);
+    uint64_t hi = vv_mmio_read32(p + 1);
     return lo | (hi << 32);
 }
 
