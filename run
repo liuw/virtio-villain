@@ -2819,7 +2819,7 @@ def main():
             sys.exit("--transport is only supported for QEMU")
         if args.transport == "mmio":
             backend = QemuMicrovm(args.vmm)
-    kernel = args.kernel or fetch_kernel(mmio=backend.name == "qemu-mmio")
+    kernel = args.kernel
 
     vmm_trace = []
     for spec in args.vmm_trace:
@@ -2876,19 +2876,6 @@ def main():
     global _VM_API_TIMEOUT
     _VM_API_TIMEOUT = 5.0 * oversub
 
-    # Only need a separate QEMU MMIO backend if main backend uses PCI
-    mmio_backend = None
-    if not backend.mmio_transport:
-        qemu_bin = os.path.basename(args.vmm)
-        if "qemu-system" in qemu_bin:
-            mmio_backend = QemuMicrovm(args.vmm)
-        else:
-            import shutil
-            arch = platform.machine()
-            qemu_path = shutil.which(f"qemu-system-{arch}")
-            if qemu_path:
-                mmio_backend = QemuMicrovm(qemu_path)
-
     # QEMU refuses aio=native without O_DIRECT, so the aio engine turns
     # direct IO on. Warn when the QEMU backend does so implicitly.
     if _qemu_aio_forces_direct(backend.name, args.io_engine, args.direct):
@@ -2925,28 +2912,24 @@ def main():
         sys.exit("No tests found.")
 
     mmio_tests = [t for t in tests if t.startswith("M")]
-    mmio_kernel = kernel
-    if mmio_tests and mmio_backend and not args.kernel:
-        mmio_kernel = fetch_kernel(mmio=True)
-    if mmio_tests and not mmio_backend and not backend.mmio_transport:
-        print(f"Note: {len(mmio_tests)} MMIO test(s) skipped "
-              f"(no MMIO transport available)", file=human)
+    skipped_mmio = []
+    if mmio_tests and not backend.mmio_transport:
+        reason = (
+            f"MMIO transport is unavailable on the selected VMM {args.vmm}.")
+        print(f"Note: skipping MMIO tests. {reason}", file=human)
+        skipped_mmio = [(name, "SKIP", reason) for name in mmio_tests]
         tests = [t for t in tests if not t.startswith("M")]
 
-    # Probe whether the kernel boots on the MMIO backend; if not, skip
-    if mmio_backend and mmio_tests:
-        probe_ok = _mmio_boots(mmio_backend, mmio_kernel, args.initramfs)
-        if not probe_ok:
-            print(f"Note: MMIO guest boot probe failed; "
-                  f"skipping {len(mmio_tests)} MMIO test(s)", file=human)
-            mmio_backend = None
-            tests = [t for t in tests if not t.startswith("M")]
+    if tests and kernel is None:
+        kernel = fetch_kernel(mmio=backend.name == "qemu-mmio")
 
-    def _backend_for(test_name):
-        """Return (backend, kernel) for a given test."""
-        if test_name.startswith("M") and mmio_backend:
-            return mmio_backend, mmio_kernel
-        return backend, kernel
+    if backend.name == "qemu-mmio" and mmio_tests:
+        probe_ok = _mmio_boots(backend, kernel, args.initramfs)
+        if not probe_ok:
+            reason = f"MMIO guest boot probe failed for {args.vmm}."
+            print(f"Note: skipping MMIO tests. {reason}", file=human)
+            skipped_mmio = [(name, "SKIP", reason) for name in mmio_tests]
+            tests = [t for t in tests if not t.startswith("M")]
 
     # Probe VMM for available devices when --skip-unsupported is set.
     if args.skip_unsupported:
@@ -2997,7 +2980,7 @@ def main():
             if not meta:
                 filtered.append(t)
                 continue
-            probe_backend, probe_kernel = _backend_for(t)
+            probe_backend, probe_kernel = backend, kernel
             options = dict(vm_opts)
             if probe_backend.name == "qemu-mmio":
                 sidecar_path = _find_sidecar(t)
@@ -3054,7 +3037,8 @@ def main():
             print(f"Note: {skipped} test(s) skipped "
                   f"(device or feature not available)", file=human)
 
-    print(f"Running {len(tests)} test(s) against {args.vmm} ({backend.name})\n",
+    total_tests = len(tests) + len(skipped_mmio)
+    print(f"Running {total_tests} test(s) against {args.vmm} ({backend.name})\n",
           file=human)
 
     saved_term = _save_term()
@@ -3126,7 +3110,8 @@ def main():
     # pads the description column to this width so it stays aligned
     # without stretching to the full terminal width.
     _desc_col = max(
-        (len(test_info.get(t, ("", "", ""))[0]) for t in tests),
+        (len(test_info.get(t, ("", "", ""))[0])
+         for t in tests + [name for name, _, _ in skipped_mmio]),
         default=10)
 
     def _color_status(status):
@@ -3205,6 +3190,9 @@ def main():
                 if line and line != attempts:
                     _emit(line)
 
+    for name, status, output in skipped_mmio:
+        _report(name, status, output)
+
     pool = None
     # Reorder tests according to --test-order.
     if args.order == "fast":
@@ -3279,34 +3267,33 @@ def main():
             pool = ThreadPoolExecutor(max_workers=args.jobs)
             futures = {
                 pool.submit(
-                    run_test, *_backend_for(item[0]),
+                    run_test, backend, kernel,
                     item if len(item) > 1 else item[0],
                     args.timeout, args.verbose, False,
                     args.disk_type, vm_opts
                 ): item for item in work_items
             }
-            done = 0
-            _progress(done, len(tests), "starting...")
+            done = len(skipped_mmio)
+            _progress(done, total_tests, "starting...")
             try:
                 for future in as_completed(futures):
                     batch_results = future.result()
                     if batch_size > 1:
                         batch_results = _retry_wedged(
-                            batch_results, *_backend_for(
-                                batch_results[0][0]),
+                            batch_results, backend, kernel,
                             args.timeout, args.verbose,
                             args.disk_type, vm_opts)
                     if args.retries > 0:
                         batch_results = _apply_retries(
                             batch_results, args.retries,
-                            *_backend_for(batch_results[0][0]),
+                            backend, kernel,
                             args.timeout, args.verbose,
                             args.disk_type, vm_opts, batch_size > 1)
                     for name, status, output in batch_results:
                         done += 1
                         with _print_lock:
                             _report(name, status, output)
-                            _progress(done, len(tests))
+                            _progress(done, total_tests)
             except KeyboardInterrupt:
                 _clear_progress()
                 print("\n\nInterrupted. Killing live VMMs...")
@@ -3337,30 +3324,30 @@ def main():
                         pass
         else:
             try:
-                done = 0
+                done = len(skipped_mmio)
                 for item in work_items:
-                    _progress(done, len(tests), item[0])
+                    _progress(done, total_tests, item[0])
                     batch_results = run_test(
-                        *_backend_for(item[0]),
+                        backend, kernel,
                         item if len(item) > 1 else item[0],
                         args.timeout, args.verbose, args.console,
                         args.disk_type, vm_opts
                     )
                     if batch_size > 1:
                         batch_results = _retry_wedged(
-                            batch_results, *_backend_for(item[0]),
+                            batch_results, backend, kernel,
                             args.timeout, args.verbose,
                             args.disk_type, vm_opts)
                     if args.retries > 0:
                         batch_results = _apply_retries(
                             batch_results, args.retries,
-                            *_backend_for(item[0]),
+                            backend, kernel,
                             args.timeout, args.verbose,
                             args.disk_type, vm_opts, batch_size > 1)
                     for name, status, output in batch_results:
                         done += 1
                         _report(name, status, output)
-                        _progress(done, len(tests))
+                        _progress(done, total_tests)
             except KeyboardInterrupt:
                 _clear_progress()
                 print("\n\nInterrupted. Killing live VMMs...")
