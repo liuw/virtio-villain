@@ -273,6 +273,101 @@ def test_unit_probe_cache_hit_prepares_nothing():
             run_case.assert_not_called()
 
 
+def test_unit_mmio_boot_cache_shares_and_invalidates():
+    import multiprocessing
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    context = multiprocessing.get_context("fork")
+    with tempfile.TemporaryDirectory() as directory, \
+         patch.object(RUN_MOD, "_PROBE_CACHE_DIR", directory):
+        paths = [os.path.join(directory, name)
+                 for name in ("vmm", "kernel", "initramfs")]
+        for path in paths:
+            with open(path, "w") as stream:
+                stream.write("initial")
+        backend = SimpleNamespace(
+            binary=paths[0], name="qemu-mmio", console_device="ttyS0",
+            build_cmd=Mock(return_value=["boot-vmm"]))
+        with patch.object(RUN_MOD.subprocess, "run", return_value=(
+                subprocess.CompletedProcess([], 0, b"[vv]\n", b""))) as launch:
+            assert RUN_MOD._mmio_boots(backend, *paths[1:])
+        launch.assert_called_once()
+        disk = backend.build_cmd.call_args.args[2]
+        assert not os.path.exists(os.path.dirname(disk))
+        backend.build_cmd.reset_mock()
+
+        def worker():
+            with patch.object(RUN_MOD.tempfile, "TemporaryDirectory",
+                              side_effect=AssertionError("prepared disk")), \
+                 patch.object(RUN_MOD.subprocess, "run",
+                              side_effect=AssertionError("launched VM")):
+                assert RUN_MOD._mmio_boots(backend, *paths[1:])
+            backend.build_cmd.assert_not_called()
+
+        for _ in range(2):
+            process = context.Process(target=worker)
+            process.start()
+            process.join(5)
+            if process.is_alive():
+                process.kill()
+                process.join()
+            assert process.exitcode == 0
+        for path in paths:
+            with open(path, "a") as stream:
+                stream.write("changed")
+            with patch.object(RUN_MOD.subprocess, "run", return_value=(
+                    subprocess.CompletedProcess(
+                        [], 0, b"[vv]\n", b""))) as launch:
+                assert RUN_MOD._mmio_boots(backend, *paths[1:])
+            launch.assert_called_once()
+
+
+def test_unit_mmio_boot_cache_retries_failed_checks():
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    failures = [
+        subprocess.CompletedProcess([], 1, b"no boot\n", b""),
+        subprocess.TimeoutExpired(["boot-vmm"], 2, output=b"no boot\n"),
+        FileNotFoundError("boot-vmm"),
+    ]
+    for failure in failures:
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(RUN_MOD, "_PROBE_CACHE_DIR", directory), \
+             patch.object(RUN_MOD, "_probe_cache_key", return_value="b" * 64):
+            backend = SimpleNamespace(
+                console_device="ttyS0",
+                build_cmd=Mock(return_value=["boot-vmm"]))
+            with patch.object(RUN_MOD.subprocess, "run",
+                              side_effect=[failure, subprocess.TimeoutExpired(
+                                  ["boot-vmm"], 2, output=b"[vv]\n")]) as launch:
+                assert not RUN_MOD._mmio_boots(backend, "kernel", "initramfs")
+                assert RUN_MOD._mmio_boots(backend, "kernel", "initramfs")
+                assert RUN_MOD._mmio_boots(backend, "kernel", "initramfs")
+            assert launch.call_count == 2
+
+
+def test_unit_mmio_boot_cache_failure_warns_and_checks_boot():
+    import contextlib
+    import io
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    backend = SimpleNamespace(
+        console_device="ttyS0", build_cmd=Mock(return_value=["boot-vmm"]))
+    output = io.StringIO()
+    with patch.object(RUN_MOD, "_cached_probe",
+                      side_effect=PermissionError("cache denied")), \
+         patch.object(RUN_MOD.subprocess, "run", return_value=(
+             subprocess.CompletedProcess([], 0, b"[vv]\n", b""))) as launch, \
+         contextlib.redirect_stderr(output):
+        assert RUN_MOD._mmio_boots(backend, "kernel", "initramfs")
+    launch.assert_called_once()
+    assert "MMIO boot probe cache unavailable" in output.getvalue()
+    assert "cache denied" in output.getvalue()
+
+
 def test_unit_mmio_probe_filters_each_launch_configuration():
     import contextlib
     import io

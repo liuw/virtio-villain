@@ -1216,7 +1216,13 @@ def _probe_records(output):
     return records
 
 
-def _read_probe_cache(fd):
+def _probe_payload(records):
+    return "".join(
+        f"PROBE\t{dev:x}\t{features:x}\t{queues}\t{isr}\t{cfg}\n"
+        for dev, features, queues, isr, cfg in records).encode()
+
+
+def _read_probe_cache(fd, decode=_probe_records):
     if os.fstat(fd).st_size != _PROBE_CACHE_SIZE:
         return None
     with mmap.mmap(fd, _PROBE_CACHE_SIZE,
@@ -1224,10 +1230,10 @@ def _read_probe_cache(fd):
         length = int.from_bytes(memory[:8], "little")
         if length == 0:
             return None
-        return _probe_records(memory[8:8 + length])
+        return decode(memory[8:8 + length])
 
 
-def _cached_probe(key, probe):
+def _cached_probe(key, probe, decode=_probe_records, encode=_probe_payload):
     """Reuse shared probe results independently of the launching process."""
     os.makedirs(_PROBE_CACHE_DIR, mode=0o700, exist_ok=True)
     directory = os.stat(_PROBE_CACHE_DIR, follow_symlinks=False)
@@ -1244,23 +1250,23 @@ def _cached_probe(key, probe):
             pass
         else:
             try:
-                cached = _read_probe_cache(fd)
+                cached = _read_probe_cache(fd, decode)
                 if cached is not None:
                     return cached
             finally:
                 fcntl.flock(fd, fcntl.LOCK_UN)
 
-        records = _probe_records(probe())
-        payload = "".join(
-            f"PROBE\t{dev:x}\t{features:x}\t{queues}\t{isr}\t{cfg}\n"
-            for dev, features, queues, isr, cfg in records).encode()
+        records = decode(probe())
+        if records is None:
+            return None
+        payload = encode(records)
         if len(payload) > _PROBE_CACHE_SIZE - 8:
             raise ValueError("capability probe exceeds shared memory size")
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return records
-        if _read_probe_cache(fd) is not None:
+        if _read_probe_cache(fd, decode) is not None:
             return records
         os.ftruncate(fd, _PROBE_CACHE_SIZE)
         with mmap.mmap(fd, _PROBE_CACHE_SIZE) as memory:
@@ -1270,6 +1276,42 @@ def _cached_probe(key, probe):
         return records
     finally:
         os.close(fd)
+
+
+def _mmio_boots(backend, kernel, initramfs):
+    def probe():
+        with tempfile.TemporaryDirectory(prefix="vv-mmio-boot-") as directory:
+            disk = os.path.join(directory, "disk.raw")
+            with open(disk, "wb") as stream:
+                stream.truncate(DISK_SIZE)
+            command = backend.build_cmd(
+                kernel, initramfs, disk,
+                f"console={backend.console_device} vv.test=list")
+            try:
+                result = subprocess.run(
+                    command, stdin=subprocess.DEVNULL,
+                    capture_output=True, timeout=2,
+                    start_new_session=True)
+                return result.stdout
+            except subprocess.TimeoutExpired as error:
+                return error.stdout or b""
+            except OSError as error:
+                print(f"Note: MMIO boot probe failed: {error}",
+                      file=sys.stderr)
+                return b""
+
+    def ready(output):
+        return True if b"[vv]" in output else None
+
+    try:
+        return bool(_cached_probe(
+            lambda: _probe_cache_key(
+                backend, kernel, initramfs, {"probe": "mmio-boot"}),
+            probe, decode=ready, encode=lambda result: b"[vv]"))
+    except (OSError, ValueError, RuntimeError) as error:
+        print(f"Warning: MMIO boot probe cache unavailable: {error}. "
+              "Checking boot without cache.", file=sys.stderr)
+        return bool(ready(probe()))
 
 
 def vm_api(api_socket, backend, command, args=None, timeout=None):
@@ -2893,25 +2935,7 @@ def main():
 
     # Probe whether the kernel boots on the MMIO backend; if not, skip
     if mmio_backend and mmio_tests:
-        probe_disk = tempfile.mktemp(suffix=".raw")
-        with open(probe_disk, "wb") as f:
-            f.truncate(DISK_SIZE)
-        probe_cmd = mmio_backend.build_cmd(
-            mmio_kernel, args.initramfs, probe_disk,
-            f"console={mmio_backend.console_device} vv.test=list")
-        probe_ok = False
-        try:
-            result = subprocess.run(
-                probe_cmd, stdin=subprocess.DEVNULL,
-                capture_output=True, timeout=2,
-                start_new_session=True)
-            probe_ok = b"[vv]" in result.stdout
-        except subprocess.TimeoutExpired as error:
-            probe_ok = b"[vv]" in (error.stdout or b"")
-        except OSError as error:
-            print(f"Note: MMIO boot probe failed: {error}", file=human)
-        finally:
-            os.unlink(probe_disk)
+        probe_ok = _mmio_boots(mmio_backend, mmio_kernel, args.initramfs)
         if not probe_ok:
             print(f"Note: MMIO guest boot probe failed; "
                   f"skipping {len(mmio_tests)} MMIO test(s)", file=human)
