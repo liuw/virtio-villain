@@ -3090,10 +3090,23 @@ def test_unit_openvmm_console_commands():
         console_device = "ttyS0"
         mmio_transport = False
 
-        def __init__(self, mode):
+        def __init__(self, mode, commands, split=None, terminate=False):
             self.mode = mode
+            self.commands = commands
+            self.split = split
+            self.terminate = terminate
 
         def build_cmd(self, *args):
+            prefix = "ERROR openvmm_entry::repl:  pulse save/restore failed error="
+            error = {
+                "unsupported": prefix + "reset not supported",
+                "unsupported-quoted": prefix + '"reset not supported"',
+                "unsupported-guest-fail": prefix + "reset not supported",
+                "restore-error": prefix + "restoring vm state",
+                "longer-error": prefix + "reset not supported by this restore path",
+                "quoted-longer-error": prefix + '"reset not supported" during restore',
+                "error": "ERROR command failed",
+            }.get(self.mode)
             script = (
                 "import os, sys, time, tty\n"
                 "tty.setraw(0)\n"
@@ -3107,37 +3120,57 @@ def test_unit_openvmm_console_commands():
                 "    time.sleep(1)\n"
                 "    sys.exit(0)\n"
                 "print('openvmm> ', flush=True)\n"
-                "for command in ('pause', 'resume'):\n"
+                f"for command in {self.commands!r}:\n"
                 "    assert sys.stdin.readline().strip() == command\n"
-                "    if mode == 'error':\n"
-                "        print('ERROR command failed', file=sys.stderr, flush=True)\n"
+                f"    error = {error!r}\n"
+                "    if error is not None:\n"
+                f"        split = {self.split!r}\n"
+                "        if split is not None:\n"
+                "            sys.stderr.write(error[:split])\n"
+                "            sys.stderr.flush()\n"
+                "            time.sleep(0.05)\n"
+                "            error = error[split:]\n"
+                "        sys.stderr.write(error)\n"
+                f"        if not {self.terminate!r}: sys.stderr.write('\\n')\n"
+                "        sys.stderr.flush()\n"
                 "        break\n"
                 "    if mode == 'timeout':\n"
                 "        time.sleep(0.4)\n"
                 "        break\n"
-                "    reply = 'pause complete' if command == 'pause' else 'resumed complete'\n"
+                "    reply = {'pause': 'pause complete', 'resume': 'resumed complete', "
+                "'pulse-save-restore': 'pulse save/restore complete'}[command]\n"
                 "    print(reply, file=sys.stderr, flush=True)\n"
-                "print('[PASS] T0001', flush=True)\n"
+                "verdict = 'FAIL' if mode == 'unsupported-guest-fail' else 'PASS'\n"
+                "print(f'[{verdict}] T0001', flush=True)\n"
+                f"if {self.terminate!r}: sys.exit(0)\n"
                 "time.sleep(1)\n"
             )
             return [sys.executable, "-u", "-c", script]
 
     def action(ctx):
         assert ctx.wait_text("[vv]", timeout=2)
-        for command in ("pause", "resume"):
+        for command in commands:
             response = ctx.vm_api(command, timeout=0.2)
             assert response.returncode == 0
 
-    for mode, expected in (("success", "PASS"), ("error", "FAIL"),
-                           ("timeout", "FAIL"), ("prompt-exit", "WEDGED"),
-                           ("prompt-timeout", "FAIL")):
+    def check(mode, expected, split=None, terminate=False):
         with patch.object(RUN_MOD, "_find_sidecar", return_value="actor"), \
              patch.object(RUN_MOD, "_load_sidecar",
                           return_value=SimpleNamespace(run=action)):
             [(name, status, output)] = RUN_MOD.run_test(
-                Backend(mode), "kernel", "T0001", 3,
+                Backend(mode, commands, split, terminate), "kernel", "T0001", 3,
                 opts={"api_enabled": True})
-        assert status == expected, (mode, name, status, output)
+        assert status == expected, (mode, split, terminate, name, status, output)
+        if mode.startswith("unsupported") and commands == ("pulse-save-restore",):
+            assert ("[vv-sidecar] SKIP: OpenVMM pulse-save-restore unavailable: "
+                    "reset not supported") in output
+            assert "[vv-sidecar] FAIL:" not in output
+        elif mode in ("restore-error", "longer-error", "quoted-longer-error"):
+            assert "[vv-sidecar] FAIL: OpenVMM pulse-save-restore failed" in output
+            assert "[vv-sidecar] SKIP:" not in output
+        elif mode == "unsupported":
+            assert "[vv-sidecar] FAIL: OpenVMM pause failed" in output
+            assert "[vv-sidecar] SKIP:" not in output
         if mode == "error":
             assert "OpenVMM pause failed" in output
         if mode == "timeout":
@@ -3146,6 +3179,36 @@ def test_unit_openvmm_console_commands():
             assert "OpenVMM exited before command prompt" in output
         if mode == "prompt-timeout":
             assert "OpenVMM command prompt timed out" in output
+
+    commands = ("pause", "resume")
+    for mode, expected in (("success", "PASS"), ("error", "FAIL"),
+                           ("timeout", "FAIL"), ("prompt-exit", "WEDGED"),
+                           ("prompt-timeout", "FAIL"), ("unsupported", "FAIL")):
+        check(mode, expected)
+
+    commands = ("pulse-save-restore",)
+    for mode, expected in (
+            ("success", "PASS"), ("unsupported", "SKIP"),
+            ("unsupported-quoted", "SKIP"), ("unsupported-guest-fail", "FAIL"),
+            ("restore-error", "FAIL"), ("longer-error", "FAIL"),
+            ("quoted-longer-error", "FAIL")):
+        check(mode, expected)
+    for mode, expected in (
+            ("unsupported", "SKIP"), ("unsupported-quoted", "SKIP"),
+            ("unsupported-guest-fail", "FAIL"), ("restore-error", "FAIL"),
+            ("longer-error", "FAIL"), ("quoted-longer-error", "FAIL")):
+        check(mode, expected, terminate=True)
+    prefix = "ERROR openvmm_entry::repl:  pulse save/restore failed error="
+    for mode, expected, split in (
+            ("unsupported", "SKIP", len("ERROR")),
+            ("unsupported", "SKIP", len(prefix + "reset not supported")),
+            ("unsupported-quoted", "SKIP", len(prefix + '"reset not supported')),
+            ("unsupported-guest-fail", "FAIL", len("ERROR")),
+            ("restore-error", "FAIL", len("ERROR")),
+            ("longer-error", "FAIL", len(prefix + "reset not supported")),
+            ("quoted-longer-error", "FAIL", len(prefix + '"reset not supported"'))):
+        check(mode, expected, split=split)
+        check(mode, expected, split=split, terminate=True)
 
 
 def test_unit_sidecar_api_rejects_exited_vmm():
