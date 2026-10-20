@@ -21,7 +21,7 @@ int vring_alloc(struct vring *vr, uint16_t size)
     return 0;
 }
 
-void vring_attach(struct virtio_dev *dev, struct vring *vr, uint16_t queue)
+void vring_prepare(struct virtio_dev *dev, struct vring *vr, uint16_t queue)
 {
     volatile struct virtio_pci_common_cfg *cfg = dev->common;
 
@@ -37,6 +37,13 @@ void vring_attach(struct virtio_dev *dev, struct vring *vr, uint16_t queue)
     // a used buffer interrupt. Otherwise a device the kernel bound with
     // no matching driver storms the shared INTx line into "nobody cared".
     vr->avail->flags = VRING_AVAIL_F_NO_INTERRUPT;
+    __sync_synchronize();
+}
+
+void vring_attach(struct virtio_dev *dev, struct vring *vr, uint16_t queue)
+{
+    vring_prepare(dev, vr, queue);
+    volatile struct virtio_pci_common_cfg *cfg = dev->common;
     cfg->queue_enable = 1;
     __sync_synchronize();
 }

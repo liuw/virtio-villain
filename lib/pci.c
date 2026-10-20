@@ -90,6 +90,19 @@ uint32_t pci_cfg_read32(int fd, uint32_t offset)
     return val;
 }
 
+uint8_t pci_find_capability(int fd, uint8_t id)
+{
+    if (!(pci_cfg_read16(fd, PCI_STATUS) & 0x10))
+        return 0;
+    uint8_t pos = pci_cfg_read8(fd, PCI_CAP_PTR) & 0xfc;
+    for (int count = 0; pos && count < 48; count++) {
+        if (pci_cfg_read8(fd, pos + PCI_CAP_LIST_ID) == id)
+            return pos;
+        pos = pci_cfg_read8(fd, pos + PCI_CAP_LIST_NEXT) & 0xfc;
+    }
+    return 0;
+}
+
 void pci_cfg_write8(int fd, uint32_t offset, uint8_t val)
 {
     ssize_t r = pwrite(fd, &val, 1, offset);

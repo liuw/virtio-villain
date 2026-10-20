@@ -59,6 +59,9 @@ int vring_alloc(struct vring *vr, uint16_t size);
 /* Attach vring to a virtio device queue. Sets addresses and enables. */
 void vring_attach(struct virtio_dev *dev, struct vring *vr, uint16_t queue);
 
+/* Configure vring without enabling, allowing interrupt setup first. */
+void vring_prepare(struct virtio_dev *dev, struct vring *vr, uint16_t queue);
+
 /* Submit a descriptor chain head to the available ring and advance idx. */
 void vring_submit(struct vring *vr, uint16_t head);
 void vring_submit_batch(struct vring *vr, const uint16_t *heads,

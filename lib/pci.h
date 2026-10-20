@@ -57,6 +57,9 @@ void pci_cfg_write32(int fd, uint32_t offset, uint32_t val);
 /* Open the config space file for a PCI slot. Caller must close(). */
 int pci_cfg_open(const char *slot);
 
+/* Find a PCI capability by ID. Returns its offset or 0 if absent. */
+uint8_t pci_find_capability(int fd, uint8_t id);
+
 /* Map a PCI BAR resource file. Returns mapped address or NULL on failure. */
 volatile void *pci_map_bar(const char *slot, int bar);
 
