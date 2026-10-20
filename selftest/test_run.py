@@ -1682,6 +1682,71 @@ def test_unit_mmio_unsupported_backend_reports_skips_without_fallback():
                             assert "1 skipped" in output.getvalue()
 
 
+def test_unit_skip_unsupported_filters_sidecar_backends_before_probing():
+    import contextlib
+    import io
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    for mixed in (False, True):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = SimpleNamespace(
+                name="openvmm", binary=MOCK_LINK, mmio_transport=False)
+            expected = ["B0001", "B0204", "SCSI0240"] if mixed else []
+            names = ["L0200", *expected]
+            modules = {
+                "L0200": SimpleNamespace(SUPPORTED_BACKENDS=("ch", "qemu")),
+                "B0204": SimpleNamespace(SUPPORTED_BACKENDS=("openvmm",)),
+                "SCSI0240": SimpleNamespace(),
+            }
+            metadata = {"L0200": {
+                "device_id": 0x1045, "required_features": 0,
+                "flags": 0, "min_queues": 0}}
+            argv = [
+                RUN, "--vmm", MOCK_LINK, "--initramfs", RUN,
+                "--skip-unsupported", "--format", "json",
+                "--jobs", "12", *names]
+            output = io.StringIO()
+            errors = io.StringIO()
+            with patch.object(RUN_MOD, "_SCRIPT_DIR", directory), \
+                 patch.object(RUN_MOD, "detect_vmm", return_value=backend), \
+                 patch.object(RUN_MOD, "print_banner"), \
+                 patch.object(RUN_MOD, "_install_termination_as_interrupt"), \
+                 patch.object(RUN_MOD, "fetch_kernel",
+                              return_value="/dev/null") as fetch, \
+                 patch.object(RUN_MOD, "get_test_list",
+                              return_value=(names, {}, metadata)), \
+                 patch.object(RUN_MOD, "_find_sidecar",
+                              side_effect=lambda name: (
+                                  name if name in modules else None)), \
+                 patch.object(RUN_MOD, "_load_sidecar",
+                              side_effect=lambda path: modules[path]), \
+                 patch.object(RUN_MOD, "_cached_probe") as probe, \
+                 patch.object(RUN_MOD, "run_test", side_effect=(
+                     lambda b, k, name, *args: [
+                         (name, "PASS", "")])) as launch, \
+                 patch.object(sys, "argv", argv), \
+                 contextlib.redirect_stdout(output), \
+                 contextlib.redirect_stderr(errors):
+                try:
+                    RUN_MOD.main()
+                except SystemExit as error:
+                    assert error.code == 0
+            probe.assert_not_called()
+            if mixed:
+                fetch.assert_called_once_with(mmio=False)
+            else:
+                fetch.assert_not_called()
+            assert sorted(call.args[2] for call in launch.call_args_list) == (
+                sorted(expected))
+            doc = json.loads(output.getvalue())
+            assert doc["total"] == len(expected)
+            assert sorted(t["name"] for t in doc["tests"]) == sorted(expected)
+            assert doc["counts"]["skip"] == 0
+            assert "sidecar" in errors.getvalue()
+
+
 def test_unit_mmio_selected_transport_uses_only_selected_vmm():
     import contextlib
     import io
