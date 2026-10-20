@@ -64,6 +64,7 @@ virtio-villain/
     vring.c/.h           # split vring setup and manipulation
     vring_packed.c/.h    # packed virtqueue support (VIRTIO_F_RING_PACKED)
     pci.c/.h             # PCI config space read/write via sysfs
+    mmio.h               # shared MMIO access primitives
     util.h               # mmap helpers, virt_to_phys, logging
   tests/
     test.h               # test registration macros, result types
