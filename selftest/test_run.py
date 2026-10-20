@@ -68,6 +68,22 @@ def run_runner(*args):
     return result
 
 
+def test_unit_probe_records_remove_interleaved_logs():
+    output = (
+        b"PROBE\t1042\t100000000\t1\t1\t0\n"
+        b"PROBE\t1044\t100000001\t2\t0\t1\n")
+    expected = [
+        (0x1042, 0x100000000, 1, 1, 0),
+        (0x1044, 0x100000001, 2, 0, 1),
+    ]
+    for noise in (
+            b"[    0.517323] clk: Disabling unused clocks\n",
+            b"cloud-hypervisor: guest log\n"):
+        for offset in range(len(output) + 1):
+            spliced = output[:offset] + noise + output[offset:]
+            assert RUN_MOD._probe_records(spliced) == expected, offset
+
+
 def test_unit_probe_cache_shares_and_recovers():
     import multiprocessing
     from unittest.mock import patch
@@ -456,7 +472,8 @@ def test_unit_openvmm_probe_filters_capabilities_and_releases_terminal():
     metadata["B0004"]["flags"] = 16
     metadata["RNG0001"]["device_id"] = 0x1044
 
-    for outcome in ("success", "exit", "timeout"):
+    for outcome in ("success", "interleaved", "exit", "timeout"):
+        valid_probe = outcome in ("success", "interleaved")
         with tempfile.TemporaryDirectory() as directory:
             backend = SimpleNamespace(
                 name="openvmm", binary=MOCK_LINK, mmio_transport=False,
@@ -483,6 +500,12 @@ def test_unit_openvmm_probe_filters_capabilities_and_releases_terminal():
                 if outcome == "exit":
                     return subprocess.CompletedProcess(
                         cmd, 1, b"", b"probe startup failed")
+                if outcome == "interleaved":
+                    return subprocess.CompletedProcess(
+                        cmd, 0,
+                        b"PR[    0.517323] clk: Disabling unused clocks\n"
+                        b"OBE\t1042\t100[    0.525669] Run /init\n"
+                        b"000000\t1\t0\t0\n", b"")
                 return subprocess.CompletedProcess(
                     cmd, 0, b"PROBE\t1042\t100000000\t1\t0\t0\n", b"")
 
@@ -509,14 +532,14 @@ def test_unit_openvmm_probe_filters_capabilities_and_releases_terminal():
                 except SystemExit as error:
                     assert error.code == 0
             probe.assert_called_once()
-            expected = ["B0001"] if outcome == "success" else names
+            expected = ["B0001"] if valid_probe else names
             assert [call.args[2] for call in launch.call_args_list] == expected
             doc = json.loads(output.getvalue())
             assert doc["total"] == len(expected)
             assert doc["counts"]["pass"] == len(expected)
             assert doc["counts"]["skip"] == 0
             assert ("capability probe unavailable" in errors.getvalue()) == (
-                outcome != "success")
+                not valid_probe)
             assert len(descriptors) == 2
             for fd in descriptors:
                 try:
