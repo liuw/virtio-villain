@@ -1591,7 +1591,11 @@ def test_unit_mmio_unsupported_backend_reports_skips_without_fallback():
 
     for backend_name in ("ch", "openvmm", "qemu"):
         for report_format in ("text", "json", "junit"):
-            for names in (["M0019"], ["M0019", "PASS"]):
+            for names, skip_unsupported in (
+                    (["M0019"], False),
+                    (["M0019", "PASS"], False),
+                    (["M0019"], True),
+                    (["M0019", "PASS"], True)):
                 with tempfile.TemporaryDirectory() as directory:
                     backend = SimpleNamespace(
                         name=backend_name, binary=MOCK_LINK,
@@ -1600,6 +1604,8 @@ def test_unit_mmio_unsupported_backend_reports_skips_without_fallback():
                         RUN, "--vmm", MOCK_LINK, "--initramfs", RUN,
                         "--format", report_format, "--jobs", "12",
                         "--batch", "2", "--retries", "1", *names]
+                    if skip_unsupported:
+                        argv.append("--skip-unsupported")
                     output = io.StringIO()
                     errors = io.StringIO()
                     with patch.object(RUN_MOD, "_SCRIPT_DIR", directory), \
@@ -1638,27 +1644,42 @@ def test_unit_mmio_unsupported_backend_reports_skips_without_fallback():
                     human = output if report_format == "text" else errors
                     assert "MMIO" in human.getvalue()
                     assert "MMIO transport is unavailable" in human.getvalue()
+                    total = len(names) - int(skip_unsupported)
+                    skipped = int(not skip_unsupported)
                     if report_format == "json":
                         doc = json.loads(output.getvalue())
                         assert doc["backend"] == backend_name
                         assert doc["vmm"] == MOCK_LINK
-                        assert doc["total"] == len(names)
-                        assert doc["counts"]["skip"] == 1
-                        case = next(t for t in doc["tests"]
-                                    if t["name"] == "M0019")
-                        assert case["status"] == "SKIP"
-                        assert "MMIO transport is unavailable" in case["output"]
+                        assert doc["total"] == total
+                        assert doc["counts"]["skip"] == skipped
+                        cases = [t for t in doc["tests"]
+                                 if t["name"] == "M0019"]
+                        if skip_unsupported:
+                            assert cases == []
+                        else:
+                            assert len(cases) == 1
+                            assert cases[0]["status"] == "SKIP"
+                            assert "MMIO transport is unavailable" in (
+                                cases[0]["output"])
                     elif report_format == "junit":
                         root = ET.fromstring(output.getvalue())
-                        assert root.get("tests") == str(len(names))
-                        assert root.get("skipped") == "1"
-                        case = root.find(
-                            ".//testcase[@name='M0019']/skipped")
-                        assert case is not None
-                        assert "MMIO transport is unavailable" in case.text
+                        assert root.get("tests") == str(total)
+                        assert root.get("skipped") == str(skipped)
+                        case = root.find(".//testcase[@name='M0019']")
+                        if skip_unsupported:
+                            assert case is None
+                        else:
+                            assert case is not None
+                            node = case.find("skipped")
+                            assert node is not None
+                            assert "MMIO transport is unavailable" in node.text
                     else:
-                        assert "[SKIP]" in output.getvalue()
-                        assert "1 skipped" in output.getvalue()
+                        if skip_unsupported:
+                            assert "M0019" not in output.getvalue()
+                            assert "[SKIP]" not in output.getvalue()
+                        else:
+                            assert "[SKIP]" in output.getvalue()
+                            assert "1 skipped" in output.getvalue()
 
 
 def test_unit_mmio_selected_transport_uses_only_selected_vmm():
