@@ -7,6 +7,7 @@
  * and contains only printable ASCII or NUL padding.
  */
 #include "tests/test.h"
+#include "lib/mmio.h"
 #include "lib/util.h"
 #include "lib/vring.h"
 #include "lib/virtio_pci.h"
@@ -24,8 +25,7 @@ static test_result_t test_fs_config_tag(struct virtio_dev *dev,
 
     volatile uint8_t *tag = (volatile uint8_t *)dev->device_cfg;
     uint8_t t[36];
-    for (int i = 0; i < 36; i++)
-        t[i] = tag[i];
+    vv_mmio_read_bytes(t, tag, sizeof(t));
 
     /* Must not be all zeros (empty tag) */
     int all_zero = 1;
