@@ -437,6 +437,96 @@ def test_unit_mmio_probe_filters_each_launch_configuration():
             assert ("capability probe unavailable" in output.getvalue()) == failed
 
 
+def test_unit_openvmm_probe_filters_capabilities_and_releases_terminal():
+    import contextlib
+    import errno
+    import io
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    names = ["B0001", "B0022", "B0002", "B0003", "B0004", "RNG0001"]
+    metadata = {
+        name: {"device_id": 0x1042, "required_features": 0,
+               "flags": 0, "min_queues": 1}
+        for name in names}
+    metadata["B0022"]["min_queues"] = 2
+    metadata["B0002"]["required_features"] = 1 << 63
+    metadata["B0003"]["flags"] = 8
+    metadata["B0004"]["flags"] = 16
+    metadata["RNG0001"]["device_id"] = 0x1044
+
+    for outcome in ("success", "exit", "timeout"):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = SimpleNamespace(
+                name="openvmm", binary=MOCK_LINK, mmio_transport=False,
+                console_device="ttyS0",
+                build_cmd=Mock(return_value=["probe-vmm"]))
+            argv = [RUN, "--vmm", MOCK_LINK, "--kernel", "/dev/null",
+                    "--initramfs", RUN, "--skip-unsupported",
+                    "--format", "json", *names]
+            descriptors = []
+            real_openpty = RUN_MOD.pty.openpty
+
+            def openpty():
+                pair = real_openpty()
+                descriptors.extend(pair)
+                return pair
+
+            def launch_probe(cmd, **kwargs):
+                assert os.isatty(kwargs["stdin"])
+                assert kwargs["start_new_session"] is False
+                assert callable(kwargs["preexec_fn"])
+                assert backend.build_cmd.call_args.args[4]["exit_on_guest_end"]
+                if outcome == "timeout":
+                    raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+                if outcome == "exit":
+                    return subprocess.CompletedProcess(
+                        cmd, 1, b"", b"probe startup failed")
+                return subprocess.CompletedProcess(
+                    cmd, 0, b"PROBE\t1042\t100000000\t1\t0\t0\n", b"")
+
+            output = io.StringIO()
+            errors = io.StringIO()
+            with patch.object(RUN_MOD, "_PROBE_CACHE_DIR", directory), \
+                 patch.object(RUN_MOD, "_SCRIPT_DIR", directory), \
+                 patch.object(RUN_MOD, "detect_vmm", return_value=backend), \
+                 patch.object(RUN_MOD, "print_banner"), \
+                 patch.object(RUN_MOD, "_install_termination_as_interrupt"), \
+                 patch.object(RUN_MOD, "get_test_list",
+                              return_value=(names, {}, metadata)), \
+                 patch.object(RUN_MOD.pty, "openpty", side_effect=openpty), \
+                 patch.object(RUN_MOD.subprocess, "run",
+                              side_effect=launch_probe) as probe, \
+                 patch.object(RUN_MOD, "run_test", side_effect=(
+                     lambda b, k, name, *args: [
+                         (name, "PASS", "")])) as launch, \
+                 patch.object(sys, "argv", argv), \
+                 contextlib.redirect_stdout(output), \
+                 contextlib.redirect_stderr(errors):
+                try:
+                    RUN_MOD.main()
+                except SystemExit as error:
+                    assert error.code == 0
+            probe.assert_called_once()
+            expected = ["B0001"] if outcome == "success" else names
+            assert [call.args[2] for call in launch.call_args_list] == expected
+            doc = json.loads(output.getvalue())
+            assert doc["total"] == len(expected)
+            assert doc["counts"]["pass"] == len(expected)
+            assert doc["counts"]["skip"] == 0
+            assert ("capability probe unavailable" in errors.getvalue()) == (
+                outcome != "success")
+            assert len(descriptors) == 2
+            for fd in descriptors:
+                try:
+                    os.fstat(fd)
+                except OSError as error:
+                    assert error.errno == errno.EBADF
+                else:
+                    raise AssertionError("probe terminal descriptor leaked")
+
+
 def test_artifact_paths():
     from unittest.mock import patch
 
