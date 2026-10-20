@@ -1581,6 +1581,146 @@ def test_transport_rejects_non_qemu():
     assert "--transport is only supported for QEMU" in result.stderr
 
 
+def test_unit_mmio_unsupported_backend_reports_skips_without_fallback():
+    import contextlib
+    import io
+    import json
+    import xml.etree.ElementTree as ET
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    for backend_name in ("ch", "openvmm", "qemu"):
+        for report_format in ("text", "json", "junit"):
+            for names in (["M0019"], ["M0019", "PASS"]):
+                with tempfile.TemporaryDirectory() as directory:
+                    backend = SimpleNamespace(
+                        name=backend_name, binary=MOCK_LINK,
+                        mmio_transport=False)
+                    argv = [
+                        RUN, "--vmm", MOCK_LINK, "--initramfs", RUN,
+                        "--format", report_format, "--jobs", "12",
+                        "--batch", "2", "--retries", "1", *names]
+                    output = io.StringIO()
+                    errors = io.StringIO()
+                    with patch.object(RUN_MOD, "_SCRIPT_DIR", directory), \
+                         patch.object(RUN_MOD, "detect_vmm",
+                                      return_value=backend), \
+                         patch.object(RUN_MOD, "print_banner"), \
+                         patch.object(RUN_MOD,
+                                      "_install_termination_as_interrupt"), \
+                         patch.object(RUN_MOD, "fetch_kernel",
+                                      return_value="/dev/null") as fetch, \
+                         patch.object(RUN_MOD, "get_test_list",
+                                      return_value=(names, {}, {})), \
+                         patch.object(RUN_MOD, "QemuMicrovm") as fallback, \
+                         patch.object(RUN_MOD, "_mmio_boots") as boot, \
+                         patch.object(shutil, "which",
+                                      return_value="/usr/bin/qemu-system-x86_64"), \
+                         patch.object(RUN_MOD, "run_test", side_effect=(
+                             lambda b, k, name, *args: [
+                                 (name, "PASS", "")])) as launch, \
+                         patch.object(sys, "argv", argv), \
+                         contextlib.redirect_stdout(output), \
+                         contextlib.redirect_stderr(errors):
+                        try:
+                            RUN_MOD.main()
+                        except SystemExit as error:
+                            assert error.code == 0
+                    fallback.assert_not_called()
+                    boot.assert_not_called()
+                    if len(names) == 1:
+                        fetch.assert_not_called()
+                    else:
+                        fetch.assert_called_once_with(mmio=False)
+                    assert launch.call_count == len(names) - 1
+                    for call in launch.call_args_list:
+                        assert call.args[:3] == (backend, "/dev/null", "PASS")
+                    human = output if report_format == "text" else errors
+                    assert "MMIO" in human.getvalue()
+                    assert "MMIO transport is unavailable" in human.getvalue()
+                    if report_format == "json":
+                        doc = json.loads(output.getvalue())
+                        assert doc["backend"] == backend_name
+                        assert doc["vmm"] == MOCK_LINK
+                        assert doc["total"] == len(names)
+                        assert doc["counts"]["skip"] == 1
+                        case = next(t for t in doc["tests"]
+                                    if t["name"] == "M0019")
+                        assert case["status"] == "SKIP"
+                        assert "MMIO transport is unavailable" in case["output"]
+                    elif report_format == "junit":
+                        root = ET.fromstring(output.getvalue())
+                        assert root.get("tests") == str(len(names))
+                        assert root.get("skipped") == "1"
+                        case = root.find(
+                            ".//testcase[@name='M0019']/skipped")
+                        assert case is not None
+                        assert "MMIO transport is unavailable" in case.text
+                    else:
+                        assert "[SKIP]" in output.getvalue()
+                        assert "1 skipped" in output.getvalue()
+
+
+def test_unit_mmio_selected_transport_uses_only_selected_vmm():
+    import contextlib
+    import io
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    for explicit_qemu, boots in ((False, True), (True, True), (True, False)):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = SimpleNamespace(
+                name="qemu-mmio" if explicit_qemu else "ch",
+                binary=MOCK_LINK, mmio_transport=True)
+            detected = RUN_MOD.Qemu(MOCK_LINK) if explicit_qemu else backend
+            argv = [RUN, "--vmm", MOCK_LINK, "--initramfs", RUN,
+                    "--format", "json", "M0019"]
+            if explicit_qemu:
+                argv.extend(["--transport", "mmio"])
+            output = io.StringIO()
+            with patch.object(RUN_MOD, "_SCRIPT_DIR", directory), \
+                 patch.object(RUN_MOD, "detect_vmm", return_value=detected), \
+                 patch.object(RUN_MOD, "print_banner"), \
+                 patch.object(RUN_MOD, "_install_termination_as_interrupt"), \
+                 patch.object(RUN_MOD, "fetch_kernel",
+                              return_value="/dev/null") as fetch, \
+                 patch.object(RUN_MOD, "get_test_list",
+                              return_value=(["M0019"], {}, {})), \
+                 patch.object(RUN_MOD, "QemuMicrovm",
+                              return_value=backend) as select, \
+                 patch.object(RUN_MOD, "_mmio_boots",
+                              return_value=boots) as boot, \
+                 patch.object(RUN_MOD, "run_test", return_value=[
+                     ("M0019", "PASS", "")]) as launch, \
+                 patch.object(sys, "argv", argv), \
+                 contextlib.redirect_stdout(output):
+                try:
+                    RUN_MOD.main()
+                except SystemExit as error:
+                    assert error.code == 0
+            if explicit_qemu:
+                select.assert_called_once_with(MOCK_LINK)
+                boot.assert_called_once_with(backend, "/dev/null", RUN)
+            else:
+                select.assert_not_called()
+                boot.assert_not_called()
+            fetch.assert_called_once_with(mmio=explicit_qemu)
+            if boots:
+                launch.assert_called_once()
+                assert launch.call_args.args[:3] == (
+                    backend, "/dev/null", "M0019")
+            else:
+                launch.assert_not_called()
+            doc = json.loads(output.getvalue())
+            assert doc["backend"] == backend.name
+            assert doc["counts"]["pass"] == int(boots)
+            assert doc["counts"]["skip"] == int(not boots)
+            if not boots:
+                assert "MMIO guest boot probe failed" in (
+                    doc["tests"][0]["output"])
+
+
 # ---------------------------------------------------------------------------
 # End to end coverage of result tags via mock VMM.
 
