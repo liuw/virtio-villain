@@ -42,6 +42,129 @@ static test_result_t dummy_test(struct virtio_dev *dev, struct vring *vr)
 REGISTER_TEST(selftest_dummy, 0x0002, dummy_test,
               "Dummy test for selftest registry", VIRTIO_SPEC_V1_2, "2.1");
 
+/* --- MMIO accessors --- */
+
+static void test_mmio_accesses(void)
+{
+    volatile uint8_t bytes[] = { 0x5a, 0, 0xa5 };
+    int matches = 1;
+    for (unsigned i = 0; i < 256; i++) {
+        bytes[1] = (uint8_t)i;
+        if (vv_mmio_read8(bytes + 1) != i)
+            matches = 0;
+        vv_mmio_write8(bytes + 1, (uint8_t)(255 - i));
+        if (bytes[1] != 255 - i)
+            matches = 0;
+    }
+    CHECK(matches, "MMIO byte reads and writes preserve all 256 values");
+    CHECK(bytes[0] == 0x5a && bytes[2] == 0xa5,
+          "MMIO byte writes preserve adjacent bytes");
+
+    volatile uint16_t halves[] = { 0x5aa5, 0, 0xa55a };
+    static const uint16_t values16[] = { 0, 1, 0x1234, 0x8000, 0xffff };
+    matches = 1;
+    for (unsigned i = 0; i < sizeof(values16) / sizeof(values16[0]); i++) {
+        halves[1] = values16[i];
+        if (vv_mmio_read16(halves + 1) != values16[i])
+            matches = 0;
+        vv_mmio_write16(halves + 1, values16[i] ^ 0xffff);
+        if (halves[1] != (uint16_t)(values16[i] ^ 0xffff))
+            matches = 0;
+    }
+    CHECK(matches, "MMIO 16 bit reads and writes preserve values");
+    CHECK(halves[0] == 0x5aa5 && halves[2] == 0xa55a,
+          "MMIO 16 bit writes preserve adjacent fields");
+
+    volatile uint32_t words[] = { 0x5aa55aa5, 0, 0xa55aa55a };
+    static const uint32_t values32[] = {
+        0, 1, 0x12345678, 0x80000000, 0xffffffff,
+    };
+    matches = 1;
+    for (unsigned i = 0; i < sizeof(values32) / sizeof(values32[0]); i++) {
+        words[1] = values32[i];
+        if (vv_mmio_read32(words + 1) != values32[i])
+            matches = 0;
+        vv_mmio_write32(words + 1, ~values32[i]);
+        if (words[1] != ~values32[i])
+            matches = 0;
+    }
+    CHECK(matches, "MMIO 32 bit reads and writes preserve values");
+    CHECK(words[0] == 0x5aa55aa5 && words[2] == 0xa55aa55a,
+          "MMIO 32 bit writes preserve adjacent fields");
+}
+
+static void test_mmio_read_bytes(void)
+{
+    volatile uint8_t source[256];
+    uint8_t copy[258];
+
+    for (unsigned i = 0; i < sizeof(source); i++)
+        source[i] = (uint8_t)i;
+    memset(copy, 0xa5, sizeof(copy));
+    vv_mmio_read_bytes(copy + 1, source, sizeof(source));
+
+    int matches = 1;
+    for (unsigned i = 0; i < sizeof(source); i++) {
+        if (copy[i + 1] != (uint8_t)i)
+            matches = 0;
+    }
+    CHECK(matches, "MMIO byte copy preserves all 256 byte values");
+    CHECK(copy[0] == 0xa5 && copy[257] == 0xa5,
+          "MMIO byte copy preserves destination boundaries");
+
+    source[0] = 0x5a;
+    vv_mmio_read_bytes(copy + 1, source, 1);
+    CHECK(copy[1] == 0x5a && copy[2] == 1,
+          "MMIO byte copy observes an updated value and exact length");
+    vv_mmio_read_bytes(copy + 1, source, 0);
+    CHECK(copy[1] == 0x5a, "zero length MMIO byte copy leaves output unchanged");
+}
+
+static void test_mmio_wrappers(void)
+{
+    volatile uint8_t bytes[] = { 0x5a, 0x81, 0xa5 };
+    volatile uint16_t halves[] = { 0x5aa5, 0x8123, 0xa55a };
+    volatile uint32_t words[] = { 0x5aa55aa5, 0x81234567, 0xa55aa55a };
+    struct virtio_mmio_dev dev = { .base = bytes };
+    CHECK(mmio_read8(&dev, 1) == 0x81,
+          "MMIO byte register read uses the requested offset");
+    mmio_write8(&dev, 1, 0xff);
+    CHECK(bytes[0] == 0x5a && bytes[1] == 0xff && bytes[2] == 0xa5,
+          "MMIO byte register write preserves width and offset");
+    dev.base = halves;
+    CHECK(mmio_read16(&dev, 2) == 0x8123,
+          "MMIO 16 bit register read uses the requested offset");
+    mmio_write16(&dev, 2, 0xffff);
+    CHECK(halves[0] == 0x5aa5 && halves[1] == 0xffff && halves[2] == 0xa55a,
+          "MMIO 16 bit register write preserves width and offset");
+    dev.base = words;
+    CHECK(mmio_read32(&dev, 4) == 0x81234567,
+          "MMIO 32 bit register read uses the requested offset");
+    mmio_write32(&dev, 4, 0xffffffff);
+    CHECK(words[0] == 0x5aa55aa5 && words[1] == 0xffffffff &&
+          words[2] == 0xa55aa55a,
+          "MMIO 32 bit register write preserves width and offset");
+
+    volatile uint32_t split[] = { 0x5aa55aa5, 0, 0, 0xa55aa55a };
+    virtio_store64(split + 1, UINT64_C(0xfedcba9876543210));
+    CHECK(split[1] == 0x76543210 && split[2] == 0xfedcba98 &&
+          split[0] == 0x5aa55aa5 && split[3] == 0xa55aa55a,
+          "PCI 64 bit store preserves low then high word layout");
+    split[1] = 0x89abcdef;
+    split[2] = 0x01234567;
+    CHECK(virtio_load64(split + 1) == UINT64_C(0x0123456789abcdef),
+          "PCI 64 bit load combines low and high words");
+
+    struct virtio_pci_common_cfg cfg = { .device_feature = 0x80000001 };
+    struct virtio_dev pci = { .common = &cfg };
+    CHECK(virtio_pci_feature_offered(&pci, 63) &&
+          cfg.device_feature_select == 1,
+          "PCI feature accessor selects the high feature word");
+    CHECK(!virtio_pci_feature_offered(&pci, 1) &&
+          cfg.device_feature_select == 0,
+          "PCI feature accessor selects the low word and masks the bit");
+}
+
 /* --- Struct size / layout checks --- */
 
 static void test_struct_sizes(void)
@@ -370,6 +493,9 @@ int main(void)
         c_reset = "\033[0m";
     }
     printf("selftest/lib:\n");
+    test_mmio_accesses();
+    test_mmio_read_bytes();
+    test_mmio_wrappers();
     test_struct_sizes();
     test_raw_set_desc();
     test_raw_set_avail();
