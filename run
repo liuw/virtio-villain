@@ -2911,6 +2911,19 @@ def main():
     if not tests:
         sys.exit("No tests found.")
 
+    if args.skip_unsupported:
+        supported_tests = []
+        for name in tests:
+            sidecar_path = _find_sidecar(name)
+            sidecar = _load_sidecar(sidecar_path) if sidecar_path else None
+            supported = getattr(sidecar, "SUPPORTED_BACKENDS", None)
+            if supported is None or backend.name in supported:
+                supported_tests.append(name)
+        if len(supported_tests) != len(tests):
+            print("Note: skipping tests whose sidecars do not support "
+                  f"{backend.name}.", file=human)
+        tests = supported_tests
+
     mmio_tests = [t for t in tests if t.startswith("M")]
     skipped_mmio = []
     if mmio_tests and not backend.mmio_transport:
@@ -2987,11 +3000,6 @@ def main():
                 sidecar_path = _find_sidecar(t)
                 if sidecar_path:
                     sidecar = _load_sidecar(sidecar_path)
-                    supported = getattr(sidecar, "SUPPORTED_BACKENDS", None)
-                    if (supported is not None
-                            and probe_backend.name not in supported):
-                        filtered.append(t)
-                        continue
                     if hasattr(sidecar, "vmm_config"):
                         config = sidecar.vmm_config() or {}
                         options.update(config.get("opts") or {})
