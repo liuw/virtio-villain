@@ -1,6 +1,7 @@
 # build outputs & runtime artifacts
 target/
 selftest/test_lib
+selftest/test_irq
 selftest/cloud-hypervisor
 
 # editor

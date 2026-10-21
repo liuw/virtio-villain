@@ -16,6 +16,7 @@ Q = $(if $(filter 1,$(V)),,@)
 
 SRCS = bin/init.c \
        lib/pci.c \
+       lib/irq.c \
        lib/virtio_pci.c \
        lib/virtio_mmio.c \
        lib/vring.c \
@@ -130,11 +131,12 @@ perf-initramfs: $(TARGET)/perf
 	@echo "$(TARGET)/perf-initramfs.cpio.gz ($$(du -h $(TARGET)/perf-initramfs.cpio.gz | cut -f1))"
 
 clean:
-	rm -rf $(TARGET) selftest/test_lib selftest/cloud-hypervisor
+	rm -rf $(TARGET) selftest/test_lib selftest/test_irq selftest/cloud-hypervisor
 
-selftest: selftest/test_lib
+selftest: selftest/test_lib selftest/test_irq
 	@echo "selftest/lib:"
 	@./selftest/test_lib
+	@./selftest/test_irq
 	@echo ""
 	@echo "selftest/run:"
 	@python3 selftest/test_run.py
@@ -150,6 +152,9 @@ selftest/test_lib: selftest/test_lib.c \
 		   tests/test.h
 	$(CC) -O2 -Wall -Wextra -I. -o $@ selftest/test_lib.c \
 	  lib/perf_engine.c lib/vring.c lib/vring_packed.c
+
+selftest/test_irq: selftest/test_irq.c lib/irq.c lib/irq.h lib/vfio.h
+	$(CC) -O2 -Wall -Wextra -Werror -I. -o $@ selftest/test_irq.c lib/irq.c
 
 PY_SRCS = run run-fuzz run-perf $(shell find selftest tests -name '*.py' 2>/dev/null)
 
