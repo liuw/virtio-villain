@@ -1474,12 +1474,12 @@ class _Ctx:
         needle = pattern.encode() if isinstance(pattern, str) else pattern
         deadline = time.time() + timeout
         while time.time() < deadline:
-            if self.stop.is_set():
-                return False
             with self._lock:
                 joined = b"".join(self._buf)
             if needle in joined:
                 return True
+            if self.stop.is_set():
+                return False
             time.sleep(0.05)
         return False
 
