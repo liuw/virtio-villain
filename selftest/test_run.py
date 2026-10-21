@@ -2807,6 +2807,7 @@ def test_unit_sidecar_supported_backend_runs():
 
 def test_unit_sidecar_outcomes():
     import glob
+    import threading
     from types import SimpleNamespace
     from unittest.mock import Mock, patch
 
@@ -2867,10 +2868,13 @@ def test_unit_sidecar_outcomes():
             ctx = SimpleNamespace(
                 backend=SimpleNamespace(name=backend_name), api_sock="api",
                 tmpdir=tmpdir, disk=disk, skip=skip, vmm_pid=1000,
+                stop=threading.Event(),
                 wait_text=Mock(return_value=True), log=Mock(),
                 vm_api=Mock(return_value=success))
 
             def successful_response(command, *args, **kwargs):
+                if command == "human-monitor-command":
+                    return {"return": ""}
                 return {"return": []} if command == "qom-list" else success
 
             ctx.vm_api.side_effect = successful_response
@@ -2881,6 +2885,7 @@ def test_unit_sidecar_outcomes():
             sidecar.run(ctx)
             commands = ctx.vm_api.call_args_list
             assert commands, f"{path} performed no host actions"
+            resize_index = 0
             for command in commands:
                 if command.args[0] == "balloon":
                     assert command.args[1] == {
@@ -2889,8 +2894,10 @@ def test_unit_sidecar_outcomes():
                 if command.args[0] == "block_resize":
                     assert command.args[1] == {
                         "device": "scsidisk" if scsi else "vd0",
-                        "size": 32 * 1024 * 1024
+                        "size": ((2 + resize_index) * 16 * 1024 * 1024
+                                 if name == "PCI0131" else 32 * 1024 * 1024)
                     }, (path, command)
+                    resize_index += 1
             waits = ctx.wait_text.call_args_list
             assert waits[0].args == (banner_text,), (path, waits)
             assert all(wait.kwargs == {"timeout": 20.0}
@@ -3079,6 +3086,15 @@ def _sidecar_api_context():
         vmm_pid=None, tmpdir="/tmp", api_sock="api", disk="disk",
         log=lambda message: None, output_buf=[],
         output_lock=threading.Lock(), stop_event=threading.Event())
+
+
+def test_unit_sidecar_reads_buffered_markers_after_stop():
+    ctx = _sidecar_api_context()
+    ctx._buf.extend([b"[vv] virtio-", b"villain\r\n[SKIP] T0001\r\n"])
+    ctx.stop.set()
+    assert ctx.wait_text("[vv]", timeout=1)
+    assert ctx.wait_text(b"[SKIP] T0001", timeout=1)
+    assert not ctx.wait_text("vv-msix-snapshot-ready", timeout=1)
 
 
 def test_unit_openvmm_console_commands():
