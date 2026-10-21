@@ -3,6 +3,7 @@
 CC      ?= musl-gcc
 CFLAGS  ?= -static -O2 -Wall -Wextra -Werror
 LDFLAGS ?= -static
+STRIP   ?= strip
 TARGET  ?= target
 OBJDIR  ?= $(TARGET)/obj
 
@@ -41,14 +42,14 @@ initramfs: $(TARGET)/init
 	@rm -rf $(TARGET)/.rootfs
 	@mkdir -p $(TARGET)/.rootfs/proc $(TARGET)/.rootfs/sys $(TARGET)/.rootfs/dev
 	@cp $(TARGET)/init $(TARGET)/.rootfs/init
-	@strip $(TARGET)/.rootfs/init
+	@$(STRIP) $(TARGET)/.rootfs/init
 	@cd $(TARGET)/.rootfs && find . | cpio -o -H newc 2>/dev/null | gzip > ../initramfs.cpio.gz
 	@rm -rf $(TARGET)/.rootfs
 	@echo "$(TARGET)/initramfs.cpio.gz ($$(du -h $(TARGET)/initramfs.cpio.gz | cut -f1))"
 
 deps-check:
 	@command -v $(CC) >/dev/null 2>&1 || { echo "error: $(CC) not found. Install musl-tools: apt install musl-tools"; exit 1; }
-	@command -v strip >/dev/null 2>&1 || { echo "error: strip not found. Install binutils: apt install binutils"; exit 1; }
+	@command -v $(STRIP) >/dev/null 2>&1 || { echo "error: $(STRIP) not found. Install binutils: apt install binutils"; exit 1; }
 	@command -v cpio >/dev/null 2>&1 || { echo "error: cpio not found. apt install cpio"; exit 1; }
 	@command -v gzip >/dev/null 2>&1 || { echo "error: gzip not found. apt install gzip"; exit 1; }
 	@command -v python3 >/dev/null 2>&1 || { echo "error: python3 not found. apt install python3"; exit 1; }
@@ -114,7 +115,7 @@ fuzz-initramfs: $(TARGET)/fuzz
 	@rm -rf $(TARGET)/.fuzzfs
 	@mkdir -p $(TARGET)/.fuzzfs/proc $(TARGET)/.fuzzfs/sys $(TARGET)/.fuzzfs/dev
 	@cp $(TARGET)/fuzz $(TARGET)/.fuzzfs/init
-	@strip $(TARGET)/.fuzzfs/init
+	@$(STRIP) $(TARGET)/.fuzzfs/init
 	@cd $(TARGET)/.fuzzfs && find . | cpio -o -H newc 2>/dev/null | gzip > ../fuzz-initramfs.cpio.gz
 	@rm -rf $(TARGET)/.fuzzfs
 	@echo "$(TARGET)/fuzz-initramfs.cpio.gz ($$(du -h $(TARGET)/fuzz-initramfs.cpio.gz | cut -f1))"
@@ -123,7 +124,7 @@ perf-initramfs: $(TARGET)/perf
 	@rm -rf $(TARGET)/.perffs
 	@mkdir -p $(TARGET)/.perffs/proc $(TARGET)/.perffs/sys $(TARGET)/.perffs/dev
 	@cp $(TARGET)/perf $(TARGET)/.perffs/init
-	@strip $(TARGET)/.perffs/init
+	@$(STRIP) $(TARGET)/.perffs/init
 	@cd $(TARGET)/.perffs && find . | cpio -o -H newc 2>/dev/null | gzip > ../perf-initramfs.cpio.gz
 	@rm -rf $(TARGET)/.perffs
 	@echo "$(TARGET)/perf-initramfs.cpio.gz ($$(du -h $(TARGET)/perf-initramfs.cpio.gz | cut -f1))"
