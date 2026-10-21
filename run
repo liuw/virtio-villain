@@ -424,6 +424,8 @@ class VmmBackend:
             parts.append(f"aio={aio}")
         if direct:
             parts.append("cache.direct=on")
+        if opts.get("blk_read_only"):
+            parts.append("readonly=on")
         return ",".join(parts)
 
 
@@ -466,6 +468,8 @@ class CloudHypervisor(VmmBackend):
             arg += ",_disable_io_uring=on,_disable_aio=on"
         if opts.get("direct"):
             arg += ",direct=on"
+        if opts.get("blk_read_only"):
+            arg += ",readonly=on"
         return arg
 
     def build_cmd(self, kernel, initramfs, disk_path, cmdline, opts=None):
@@ -877,7 +881,9 @@ class OpenVmm(VmmBackend):
 
         cmd += ["--com1", "console"]
         if want("blk"):
-            cmd += ["--virtio-blk", self._blk_arg(disk_path, "disk", opts)]
+            cmd += ["--virtio-blk", self._blk_arg(
+                disk_path, "disk", opts,
+                read_only=opts.get("blk_read_only", False))]
         if want("net"):
             net_rx_port = opts.get("net_rx_port")
             endpoint = "pcie_port=net:consomme"
@@ -3035,13 +3041,12 @@ def main():
                 continue
             probe_backend, probe_kernel = backend, kernel
             options = dict(vm_opts)
-            if probe_backend.name == "qemu-mmio":
-                sidecar_path = _find_sidecar(t)
-                if sidecar_path:
-                    sidecar = _load_sidecar(sidecar_path)
-                    if hasattr(sidecar, "vmm_config"):
-                        config = sidecar.vmm_config() or {}
-                        options.update(config.get("opts") or {})
+            sidecar_path = _find_sidecar(t)
+            if sidecar_path:
+                sidecar = _load_sidecar(sidecar_path)
+                if hasattr(sidecar, "vmm_config"):
+                    config = sidecar.vmm_config() or {}
+                    options.update(config.get("opts") or {})
             identity = (probe_backend.name, probe_kernel,
                         json.dumps(options, sort_keys=True))
             if identity not in probes:
@@ -3284,7 +3289,7 @@ def main():
     elif args.order == "reverse":
         tests.sort(reverse=True)
 
-    # Group tests into batches. Sidecar tests (02xx/03xx) are never
+    # Group tests into batches. Sidecar tests are never
     # batched because they need per test host actors and VM config.
     batch_size = args.batch
     if batch_size > 1:
@@ -3292,7 +3297,7 @@ def main():
 
         def _must_solo(t):
             """Tests that must not be batched."""
-            if _sc_re.match(t):
+            if _sc_re.match(t) or _find_sidecar(t):
                 return True
             meta = _test_meta.get(t)
             if meta and meta["flags"] & 4:  # TEST_FLAG_XFAIL

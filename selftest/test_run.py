@@ -1287,6 +1287,85 @@ def test_unit_openvmm_build_cmd_blk_direct():
     assert _openvmm_opt(cmd, "--virtio-blk") == "file:/d.raw;direct,pcie_port=disk"
 
 
+def test_unit_block_readonly_configuration():
+    from unittest.mock import patch
+
+    with patch.object(RUN_MOD, "_SCRIPT_DIR", ROOT_DIR):
+        sidecar = RUN_MOD._load_sidecar(RUN_MOD._find_sidecar("B0057"))
+    assert sidecar.vmm_config() == {"opts": {"blk_read_only": True}}
+    for backend, flag, readonly in (
+            (RUN_MOD.CloudHypervisor, "--disk", "readonly=on"),
+            (RUN_MOD.Qemu, "-drive", "readonly=on"),
+            (RUN_MOD.QemuMicrovm, "-drive", "readonly=on"),
+            (RUN_MOD.OpenVmm, "--virtio-blk", "ro")):
+        instance = backend("vmm")
+        for direct in (False, True):
+            options = {"direct": direct}
+            cmd = instance.build_cmd("/k", "/i", "/d.raw", "c", options)
+            assert readonly not in _openvmm_opt(cmd, flag).split(",")
+            options.update(sidecar.vmm_config()["opts"])
+            cmd = instance.build_cmd("/k", "/i", "/d.raw", "c", options)
+            assert readonly in _openvmm_opt(cmd, flag).split(",")
+
+
+def test_unit_readonly_probe_and_batch_configuration():
+    import contextlib
+    import io
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    names = ["B0001", "B0057", "B0002"]
+    metadata = {
+        name: {"device_id": 0x1042, "required_features": (
+            0x20 if name == "B0057" else 0), "flags": 0, "min_queues": 1}
+        for name in names}
+    sidecar = SimpleNamespace(
+        vmm_config=lambda: {"opts": {"blk_read_only": True}})
+    for backend_name in ("ch", "qemu", "openvmm"):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = SimpleNamespace(
+                name=backend_name, binary=MOCK_LINK, mmio_transport=False,
+                console_device="ttyS0", build_cmd=Mock(
+                    side_effect=lambda k, i, d, c, o: [
+                        "probe-vmm", str(o.get("blk_read_only", False))]))
+
+            def launch(cmd, **kwargs):
+                features = b"20" if cmd[1] == "True" else b"0"
+                return subprocess.CompletedProcess(
+                    cmd, 0, b"PROBE\t1042\t" + features + b"\t1\t1\t0\n", b"")
+
+            def run_case(b, k, selected, *args):
+                if isinstance(selected, str):
+                    selected = [selected]
+                return [(name, "PASS", "") for name in selected]
+
+            argv = [RUN, "--vmm", MOCK_LINK, "--kernel", "/dev/null",
+                    "--initramfs", RUN, "--skip-unsupported", "--batch", "2",
+                    "-j", "1", *names]
+            with patch.object(RUN_MOD, "_PROBE_CACHE_DIR", directory), \
+                 patch.object(RUN_MOD, "_SCRIPT_DIR", directory), \
+                 patch.object(RUN_MOD, "detect_vmm", return_value=backend), \
+                 patch.object(RUN_MOD, "print_banner"), \
+                 patch.object(RUN_MOD, "_install_termination_as_interrupt"), \
+                 patch.object(RUN_MOD, "get_test_list",
+                              return_value=(names, {}, metadata)), \
+                 patch.object(RUN_MOD, "_find_sidecar", side_effect=(
+                     lambda name: "sidecar" if name == "B0057" else None)), \
+                 patch.object(RUN_MOD, "_load_sidecar", return_value=sidecar), \
+                 patch.object(RUN_MOD.subprocess, "run", side_effect=launch), \
+                 patch.object(RUN_MOD, "run_test",
+                              side_effect=run_case) as run_test, \
+                 patch.object(sys, "argv", argv), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    RUN_MOD.main()
+                except SystemExit as error:
+                    assert error.code == 0
+            assert backend.build_cmd.call_count == 2
+            assert [call.args[2] for call in run_test.call_args_list] == [
+                ["B0001", "B0002"], "B0057"]
+
+
 def test_unit_openvmm_build_cmd_accepts_io_uring():
     be = RUN_MOD.OpenVmm("/opt/openvmm/openvmm")
     cmd = be.build_cmd("/k", "/i", "/d.raw", "c", {"io_engine": "io_uring"})
